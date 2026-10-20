@@ -23,6 +23,10 @@
     activities: [],
     checkIntervalMinutes: 10,
     checkinTimer: null,
+    lastCheckinAt: 0,      // mốc check-in thành công gần nhất của chính mình (lạc quan, tại máy này)
+    lastCheckinTry: 0,     // mốc lần thử check-in gần nhất (chống ghi dồn khi focus/visible)
+    presenceBound: false,  // đã gắn sự kiện focus/visibilitychange cho check-in chưa
+    boardIdx: 0,           // cột đang xem trên bảng việc (mobile, vuốt ngang)
     clockTimer: null,
     currentTab: "overview",
     collapsedOrg: {},
@@ -61,6 +65,13 @@
     if (!ms) return "";
     var d = new Date(ms);
     return pad2(d.getDate()) + "/" + pad2(d.getMonth() + 1) + "/" + d.getFullYear();
+  }
+  function fmtClock(ts) {
+    var ms = tsMillis(ts);
+    if (!ms && typeof ts === "number") ms = ts;
+    if (!ms) return "";
+    var d = new Date(ms);
+    return pad2(d.getHours()) + ":" + pad2(d.getMinutes());
   }
   function fmtRel(ts) {
     var ms = tsMillis(ts);
@@ -124,14 +135,20 @@
     return { byId: byId, children: children, roots: roots };
   }
 
-  /* Trạng thái kiểm tra phòng họp: luật áp dụng cho TẤT CẢ nhân viên */
+  /* Trạng thái kiểm tra phòng họp: luật áp dụng cho TẤT CẢ nhân viên.
+     - provisioning "pending": Chờ mở trình duyệt
+     - chưa từng có lastCheckAt: Chưa từng vào phòng họp
+     - quá chu kỳ: Quá hạn kiểm tra. Đúng chu kỳ: Kiểm tra đúng hạn */
   function checkInfo(e) {
     if (e.provisioning === "pending") {
       return { kind: "wait", text: "Chờ mở trình duyệt", cls: "chip check-wait" };
     }
     var iv = state.checkIntervalMinutes || 10;
     var last = tsMillis(e.lastCheckAt);
-    if (!last || (Date.now() - last) > iv * 60000) {
+    if (!last) {
+      return { kind: "never", text: "Chưa từng vào phòng họp", cls: "chip check-wait" };
+    }
+    if ((Date.now() - last) > iv * 60000) {
       return { kind: "late", text: "Quá hạn kiểm tra", cls: "chip check-late" };
     }
     return { kind: "ok", text: "Kiểm tra đúng hạn", cls: "chip check-ok" };
@@ -141,23 +158,31 @@
     var ci = checkInfo(e);
     return '<span class="' + ci.cls + '">' + ci.text + '</span>';
   }
-  function statusDot(e) {
-    if (e.suspended) return "dot off";
-    if (e.provisioning === "pending") return "dot off";
-    if (checkInfo(e).kind === "late") return "dot late";
-    return e.status === "Đang hoạt động" ? "dot on" : "dot off";
-  }
+
+  /* Hiện diện: MỘT hàm suy trạng thái duy nhất từ lastCheckAt, dùng ở mọi nơi
+     (header, dải hiện diện, thẻ nhân viên, cây tổ chức, hồ sơ chi tiết).
+     Trực tuyến nếu lần kiểm tra gần nhất trong vòng chu kỳ + 2 phút ân hạn —
+     ân hạn này tránh chấm trạng thái nhấp nháy giữa hai lần check-in liên tiếp. */
   function presenceOf(e) {
+    var iv = state.checkIntervalMinutes || 10;
+    if (e.suspended) {
+      return { state: "suspended", online: false, dot: "dot off", label: "Tạm ngưng", sub: "" };
+    }
+    if (e.provisioning === "pending") {
+      return { state: "pending", online: false, dot: "dot off", label: "Chờ mở trình duyệt", sub: "Chưa kích hoạt tài khoản" };
+    }
     var last = tsMillis(e.lastCheckAt);
-    var windowMs = ((state.checkIntervalMinutes || 10) + 2) * 60000;
-    if (e.suspended) return { online: false, label: "Tạm ngưng", sub: "" };
-    if (last && (Date.now() - last) <= windowMs) {
-      return { online: true, label: "Đang trực tuyến", sub: "Kiểm tra gần nhất: " + fmtTime(e.lastCheckAt) };
+    if (!last) {
+      return { state: "never", online: false, dot: "dot off", label: "Chưa từng vào phòng họp", sub: "" };
     }
-    if (last) {
-      return { online: false, label: "Hoạt động " + fmtRel(e.lastCheckAt) + " trước", sub: fmtTime(e.lastCheckAt) };
+    var age = Date.now() - last;
+    if (age <= (iv + 2) * 60000) {
+      return { state: "online", online: true, dot: "dot on", label: "Đang trực tuyến", sub: "Kiểm tra lúc " + fmtClock(e.lastCheckAt) };
     }
-    return { online: false, label: "Chưa từng kiểm tra", sub: "" };
+    return { state: "recent", online: false, dot: "dot late", label: "Hoạt động " + fmtRel(e.lastCheckAt) + " trước", sub: fmtTime(e.lastCheckAt) };
+  }
+  function statusDot(e) {
+    return presenceOf(e).dot;
   }
 
   function isDirector() { return !!state.me && state.me.level === "Giám đốc"; }
@@ -284,27 +309,53 @@
   }
 
   /* ---------- Hồ sơ người dùng ---------- */
+  function setMeFromDoc(doc) {
+    var d = doc.data();
+    state.me = {
+      id: doc.id, name: d.name || "", title: d.title || "", level: d.level || "",
+      role: d.role || "", realDoc: true
+    };
+  }
   function loadMyProfile(user) {
-    var email = (user.email || "").toLowerCase();
-    return db.collection("employees").where("loginEmail", "==", user.email).limit(1).get()
+    var email = String(user.email || "").trim().toLowerCase();
+    var directorEmail = String(DIRECTOR_EMAIL || "").trim().toLowerCase();
+    /* Cách 1: truy vấn thẳng theo loginEmail đã chuẩn hoá */
+    return db.collection("employees").where("loginEmail", "==", email).limit(1).get()
       .then(function (snap) {
         if (!snap.empty) {
-          var doc = snap.docs[0];
-          var d = doc.data();
-          state.me = {
-            id: doc.id, name: d.name || "", title: d.title || "", level: d.level || "",
-            role: d.role || "", realDoc: true
-          };
+          setMeFromDoc(snap.docs[0]);
           return true;
         }
-        if (email === String(DIRECTOR_EMAIL).toLowerCase()) {
-          state.me = {
-            id: "director", name: "Chung", title: "Giám đốc", level: "Giám đốc",
-            role: "Điều hành chung", realDoc: false
-          };
-          return true;
-        }
-        return false;
+        /* Cách 2 (dự phòng): quét toàn bộ danh sách, so khớp không phân biệt hoa/thường
+           và chấp nhận cả khoảng trắng thừa — tránh trượt hồ sơ vì dữ liệu nhập tay. */
+        return db.collection("employees").get().then(function (all) {
+          var found = null;
+          all.forEach(function (doc) {
+            if (found) return;
+            var d = doc.data();
+            var le = String(d.loginEmail || "").trim().toLowerCase();
+            if (le && le === email) found = doc;
+            /* Giám đốc dùng bản ghi "chung" kể cả khi loginEmail trong bản ghi bị trống/sai */
+            if (!found && email === directorEmail && doc.id === "chung") found = doc;
+          });
+          if (found) {
+            setMeFromDoc(found);
+            return true;
+          }
+          if (email === directorEmail) {
+            console.warn("loadMyProfile: không tìm thấy bản ghi nhân viên cho email Giám đốc — dùng hồ sơ Giám đốc dự phòng (realDoc=false, check-in sẽ không ghi được). Hãy kiểm tra trường loginEmail của bản ghi Giám đốc trong Firestore.");
+            state.me = {
+              id: "director", name: "Chung", title: "Giám đốc", level: "Giám đốc",
+              role: "Điều hành chung", realDoc: false
+            };
+            return true;
+          }
+          return false;
+        });
+      })
+      .catch(function (e) {
+        console.error("loadMyProfile thất bại:", e);
+        throw e;
       });
   }
 
@@ -322,6 +373,33 @@
     startListeners();
     startCheckin();
     startClock();
+    renderSelfStatus();
+  }
+
+  /* Chip trạng thái của CHÍNH MÌNH trên header — luôn thấy ở mọi tab:
+     "Đang trực tuyến · kiểm tra lúc HH:MM" kèm avatar của mình. */
+  function renderSelfStatus() {
+    var chip = $("selfStatus"), av = $("selfAvatar");
+    if (!chip) return;
+    if (!state.me) {
+      chip.classList.add("hidden");
+      if (av) { av.classList.add("hidden"); av.innerHTML = ""; }
+      return;
+    }
+    var mine = state.me.realDoc ? empById(state.me.id) : null;
+    var lastMs = mine ? tsMillis(mine.lastCheckAt) : null;
+    if (!lastMs && state.lastCheckinAt) lastMs = state.lastCheckinAt;
+    var label;
+    if (lastMs) label = "Đang trực tuyến · kiểm tra lúc " + fmtClock(lastMs);
+    else if (state.me.realDoc) label = "Đang trực tuyến · đang điểm danh…";
+    else label = "Đang trực tuyến";
+    chip.innerHTML = '<span class="dot on"></span>' + esc(label);
+    chip.classList.remove("hidden");
+    if (av) {
+      var src = mine || { name: state.me.name, color: "#4f46e5" };
+      av.innerHTML = avatarHtml(src, "sm");
+      av.classList.remove("hidden");
+    }
   }
 
   function showLogin() {
@@ -332,6 +410,7 @@
     $("appView").classList.add("hidden");
     $("noProfileView").classList.add("hidden");
     $("loginView").classList.remove("hidden");
+    renderSelfStatus();
   }
 
   function showNoProfile(email) {
@@ -376,6 +455,7 @@
         renderEmployeesTab();
         renderAssigneeOptions();
         renderBell();
+        renderSelfStatus();
       }, function (e) { console.warn("employees listener:", e); })
     );
     state.unsub.push(
@@ -409,34 +489,71 @@
     state.unsub = [];
   }
 
-  /* ---------- Check-in tự động: áp dụng cho MỌI tài khoản có hồ sơ ---------- */
+  /* ---------- Check-in tự động: áp dụng cho MỌI tài khoản có hồ sơ ----------
+     Chạy NGAY khi đăng nhập xong, lặp theo chu kỳ cài đặt, và chạy lại mỗi khi
+     người dùng quay lại tab (focus / visibilitychange -> visible). */
   function doCheckin() {
-    if (!state.me || !state.me.realDoc || !db) return;
+    if (!db || !state.me) return;
+    if (!state.me.realDoc) {
+      console.warn("check-in: bỏ qua vì hồ sơ của tôi chưa gắn với bản ghi nhân viên thật (realDoc=false). Kiểm tra trường loginEmail trong Firestore để check-in ghi đúng bản ghi.");
+      return;
+    }
+    state.lastCheckinTry = Date.now();
     db.collection("employees").doc(state.me.id).update({
       lastCheckAt: serverTimestamp(),
       status: "Đang hoạt động"
-    }).catch(function (e) { console.warn("check-in:", e); });
+    }).then(function () {
+      /* Ghi nhận lạc quan tại máy này để chip trạng thái trên header hiện đúng
+         ngay lập tức, không phải đợi snapshot Firestore quay về. */
+      state.lastCheckinAt = Date.now();
+      renderSelfStatus();
+    }).catch(function (e) { console.error("check-in thất bại:", e); });
+  }
+  function checkinOnReturn() {
+    if (document.visibilityState && document.visibilityState !== "visible") return;
+    /* Chống ghi dồn: bỏ qua nếu lần thử gần nhất cách đây chưa đầy 20 giây */
+    if (Date.now() - (state.lastCheckinTry || 0) < 20000) return;
+    doCheckin();
+  }
+  function onVisibilityForCheckin() {
+    if (!document.visibilityState || document.visibilityState === "visible") checkinOnReturn();
   }
   function startCheckin() {
     stopCheckin();
     doCheckin();
     var ms = Math.max(1, state.checkIntervalMinutes || 10) * 60 * 1000;
     state.checkinTimer = setInterval(doCheckin, ms);
+    if (!state.presenceBound) {
+      document.addEventListener("visibilitychange", onVisibilityForCheckin);
+      window.addEventListener("focus", checkinOnReturn);
+      state.presenceBound = true;
+    }
   }
   function stopCheckin() {
     if (state.checkinTimer) { clearInterval(state.checkinTimer); state.checkinTimer = null; }
+    if (state.presenceBound) {
+      document.removeEventListener("visibilitychange", onVisibilityForCheckin);
+      window.removeEventListener("focus", checkinOnReturn);
+      state.presenceBound = false;
+    }
   }
 
-  /* Đồng hồ phút: làm mới các nhãn phụ thuộc thời gian (quá hạn kiểm tra, hiện diện, quá hạn việc) */
+  /* Đồng hồ 30 giây: làm mới mọi nhãn phụ thuộc thời gian (hiện diện, quá hạn kiểm tra,
+     quá hạn việc, thời gian tương đối) mà không cần tải lại trang */
   function startClock() {
     stopClock();
     state.clockTimer = setInterval(function () {
       if (!state.me) return;
+      renderSelfStatus();
       renderOverview();
+      renderOrgTree();
       renderEmployeesTab();
-      renderTasks();
+      /* Không dựng lại bảng việc khi người dùng đang gõ trong thẻ (tránh mất chữ đang nhập) */
+      var ae = document.activeElement;
+      var board = $("taskBoard");
+      if (!(ae && board && board.contains(ae))) renderTasks();
       renderBell();
-    }, 60 * 1000);
+    }, 30 * 1000);
   }
   function stopClock() {
     if (state.clockTimer) { clearInterval(state.clockTimer); state.clockTimer = null; }
@@ -884,6 +1001,28 @@
     }).catch(function (e) { console.warn("update task status:", e); });
   }
 
+  /* Chấm chỉ thị cột (mobile): bảng việc vuốt ngang snap từng cột, chấm cho biết đang ở cột nào */
+  function renderBoardDots() {
+    var dots = $("boardDots"), board = $("taskBoard");
+    if (!dots || !board) return;
+    var cols = board.querySelectorAll(".board-col");
+    if (!cols.length) { dots.innerHTML = ""; return; }
+    if (state.boardIdx > cols.length - 1) state.boardIdx = 0;
+    var html = "";
+    for (var i = 0; i < cols.length; i++) {
+      html += '<button type="button" class="bdot' + (i === state.boardIdx ? " active" : "") +
+        '" data-bdot="' + i + '" aria-label="Xem cột ' + (i + 1) + '"></button>';
+    }
+    dots.innerHTML = html;
+  }
+  function scrollBoardTo(idx) {
+    var board = $("taskBoard");
+    if (!board) return;
+    var col = board.querySelector(".board-col");
+    if (!col) return;
+    board.scrollTo({ left: idx * (col.offsetWidth + 10), behavior: "smooth" });
+  }
+
   function renderTasks() {
     var board = $("taskBoard");
     if (!board) return;
@@ -935,6 +1074,7 @@
           .catch(function (e) { console.warn("update task note:", e); saveBtn.disabled = false; });
       });
     });
+    renderBoardDots();
   }
 
   function dateInputToTimestamp(val) {
@@ -1101,7 +1241,7 @@
   function renderOverview() {
     if (!$("statTotal")) return;
     var active = state.employees.filter(function (e) {
-      return e.status === "Đang hoạt động" && !e.suspended;
+      return !e.suspended && presenceOf(e).online;
     }).length;
     var doing = state.tasks.filter(function (t) { return t.status !== "Hoàn thành"; }).length;
     var done = state.tasks.filter(function (t) { return t.status === "Hoàn thành"; }).length;
@@ -1115,12 +1255,12 @@
       grid.innerHTML = '<p class="hint">Chưa có hồ sơ nhân viên nào.</p>';
     } else {
       grid.innerHTML = state.employees.map(function (e) {
-        var ci = checkInfo(e);
+        var p = presenceOf(e);
         return '<div class="emp-card clickable" data-profile="' + esc(e.id) + '">' +
           '<div class="e-head">' + avatarHtml(e) +
             "<div><div class=\"e-name\">" + esc(e.name || "") + "</div>" +
             '<div class="e-title">' + esc(e.title || "") + "</div></div>" +
-            '<span class="' + statusDot(e) + '" style="margin-left:auto"></span>' +
+            '<span class="' + p.dot + '" style="margin-left:auto"></span>' +
           "</div>" +
           '<div class="e-chips">' +
             '<span class="chip level">' + esc(e.level || "") + "</span>" +
@@ -1129,13 +1269,15 @@
           "</div>" +
           '<div class="e-work">Đang làm: ' + esc(e.currentWork || "—") + "</div>" +
           '<div class="e-foot"><span>Việc đang mở: <b>' + openTasksOf(e.id) + "</b></span>" +
-            "<span>Kiểm tra gần nhất: " + (e.lastCheckAt ? esc(fmtRel(e.lastCheckAt)) + " trước" : "chưa có") + "</span></div>" +
+            "<span>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</span></div>" +
         "</div>";
       }).join("");
     }
     renderPresence();
   }
 
+  /* Dải hiện diện ngang: avatar + chấm trạng thái + tên + trạng thái + việc đang làm,
+     người trực tuyến xếp trước. Bấm vào từng người để mở hồ sơ chi tiết. */
   function renderPresence() {
     var box = $("presenceList");
     if (!box) return;
@@ -1150,14 +1292,14 @@
     });
     box.innerHTML = list.map(function (e) {
       var p = presenceOf(e);
-      return '<div class="presence-item">' + avatarHtml(e, "sm") +
-        '<div><div class="p-name">' + esc(e.name || "") +
-          ' <span class="muted" style="font-weight:400">— ' + esc(e.title || "") + "</span></div>" +
-          '<div class="p-work">Đang làm: ' + esc(e.currentWork || "—") + "</div></div>" +
-        '<div class="p-state"><span class="dot ' + (p.online ? "on" : "off") + '" style="box-shadow:none"></span> ' +
-          esc(p.label) +
-          (p.sub ? '<span class="p-sub">' + esc(p.sub) + "</span>" : "") +
-        "</div></div>";
+      return '<div class="pstrip-item clickable" data-profile="' + esc(e.id) + '">' +
+        '<div class="pstrip-av">' + avatarHtml(e) +
+          '<span class="pstrip-dot ' + p.dot + '"></span></div>' +
+        '<div class="pstrip-name">' + esc(e.name || "") + "</div>" +
+        '<div class="pstrip-state' + (p.online ? " on" : "") + '">' + esc(p.label) + "</div>" +
+        (p.sub ? '<div class="pstrip-sub">' + esc(p.sub) + "</div>" : "") +
+        '<div class="pstrip-work">' + esc(e.currentWork || "—") + "</div>" +
+      "</div>";
     }).join("");
   }
 
@@ -1232,6 +1374,7 @@
   function tvNodeHtml(e, maps) {
     var kids = maps.children[e.id] || [];
     var collapsed = !!state.collapsedTv[e.id];
+    var p = presenceOf(e);
     var html = '<li><div class="tv-node clickable" data-profile="' + esc(e.id) + '">' +
       (kids.length
         ? '<button class="tv-toggle" type="button" data-collapse-tv="' + esc(e.id) + '" aria-label="Thu gọn hoặc mở rộng">' + (collapsed ? "+" : "−") + "</button>"
@@ -1244,8 +1387,8 @@
       (kids.length ? '<span class="n-kids">' + kids.length + " cấp dưới</span>" : "") +
       '<span class="spacer">' +
         (e.suspended ? '<span class="chip susp">Tạm ngưng</span>' : checkChipHtml(e)) +
-        '<span class="' + statusDot(e) + '"></span>' +
-        '<span class="muted" style="font-size:.88rem">' + esc(e.status || "") + "</span>" +
+        '<span class="' + p.dot + '"></span>' +
+        '<span class="muted" style="font-size:.88rem">' + esc(p.label) + "</span>" +
       "</span></div>";
     if (kids.length && !collapsed) {
       html += '<ul class="tv">' + kids.map(function (k) { return tvNodeHtml(k, maps); }).join("") + "</ul>";
@@ -1292,7 +1435,7 @@
           (e.role ? '<span class="chip role">' + esc(e.role) + "</span>" : "") +
           (e.suspended ? '<span class="chip susp">Tạm ngưng</span>' : checkChipHtml(e)) +
           '<span class="' + statusDot(e) + '" style="margin-left:auto"></span>' +
-          '<span class="muted" style="font-size:.9rem">' + esc(e.status || "") + "</span>" +
+          '<span class="muted" style="font-size:.9rem">' + esc(presenceOf(e).label) + "</span>" +
         "</div>" +
         "<dl>" +
           "<dt>Đang làm</dt><dd>" + esc(e.currentWork || "—") + "</dd>" +
@@ -1301,7 +1444,7 @@
           "<dt>Hồ sơ trình duyệt</dt><dd>" + esc(e.browserProfile || "—") + "</dd>" +
           "<dt>Email đăng nhập</dt><dd>" + esc(e.loginEmail || "—") + "</dd>" +
           "<dt>Mã truy cập</dt><dd class=\"mono\">" + esc(e.accessCode || "—") + "</dd>" +
-          "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)" : "Chưa từng kiểm tra") + "</dd>" +
+          "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)" : "Chưa từng vào phòng họp") + "</dd>" +
           "<dt>Kích hoạt</dt><dd>" + (e.provisioning === "pending" ? "Chờ mở trình duyệt (provisioning: pending)" : "Đã kích hoạt") + "</dd>" +
         "</dl>" +
         actions +
@@ -1556,6 +1699,7 @@
     var done = myTasks.filter(function (t) { return t.status === "Hoàn thành"; }).length;
     var given = state.tasks.filter(function (t) { return t.assignerId === e.id; }).length;
     var sent = state.messages.filter(function (m) { return m.senderId === e.id; }).length;
+    var p = presenceOf(e);
 
     var subsHtml = subs.length
       ? '<div class="sub-list">' + subs.map(function (s) {
@@ -1579,12 +1723,14 @@
         '<div class="p-title">' + esc(e.title || "") + "</div>" +
         '<div class="p-chips"><span class="chip level">' + esc(e.level || "") + "</span>" +
         (e.role ? '<span class="chip role">' + esc(e.role) + "</span>" : "") +
+        '<span class="chip"><span class="' + p.dot + '" style="box-shadow:none"></span>' + esc(p.label) + "</span>" +
         (e.suspended ? '<span class="chip susp">Tạm ngưng</span>' : checkChipHtml(e)) +
         "</div></div></div>" +
       "<dl>" +
         "<dt>Chức vụ</dt><dd>" + esc(e.title || "—") + "</dd>" +
         "<dt>Cấp bậc</dt><dd>" + esc(e.level || "—") + "</dd>" +
         "<dt>Vai trò</dt><dd>" + esc(e.role || "—") + "</dd>" +
+        "<dt>Hiện diện</dt><dd>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</dd>" +
         "<dt>Trạng thái</dt><dd>" + esc(e.status || "—") + (e.suspended ? " (đang tạm ngưng)" : "") + "</dd>" +
         "<dt>Đang làm</dt><dd>" + esc(e.currentWork || "—") + "</dd>" +
         "<dt>Cấp trên</dt><dd>" + (mgr
@@ -1592,7 +1738,7 @@
           : "— Cấp cao nhất") + "</dd>" +
         "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt
           ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)"
-          : "Chưa từng kiểm tra") + "</dd>" +
+          : "Chưa từng vào phòng họp") + "</dd>" +
         "<dt>Trạng thái kiểm tra</dt><dd>" + (e.suspended ? "Đang tạm ngưng" : esc(checkInfo(e).text)) + "</dd>" +
         "<dt>Kích hoạt</dt><dd>" + (e.provisioning === "pending" ? "Chờ mở trình duyệt (provisioning: pending)" : "Đã kích hoạt") + "</dd>" +
         "<dt>Tài khoản Muse</dt><dd>" + esc(e.accountLabel || "—") + "</dd>" +
@@ -1676,6 +1822,8 @@
     if (!t || typeof t.closest !== "function") return;
     if (!t.closest(".bell-wrap")) closeBell();
 
+    var bd = t.closest("[data-bdot]");
+    if (bd) { scrollBoardTo(Number(bd.getAttribute("data-bdot"))); return; }
     var rm = t.closest("[data-rmfile]");
     if (rm) {
       state.pendingFiles.splice(Number(rm.getAttribute("data-rmfile")), 1);
@@ -1758,6 +1906,22 @@
         renderTasks();
       });
     });
+    /* Bảng việc trên mobile: vuốt ngang snap từng cột — cập nhật chấm chỉ thị theo vị trí cuộn */
+    var boardEl = $("taskBoard");
+    if (boardEl) {
+      boardEl.addEventListener("scroll", function () {
+        var col = boardEl.querySelector(".board-col");
+        if (!col) return;
+        var w = col.offsetWidth + 10;
+        if (!w) return;
+        var idx = Math.max(0, Math.min(3, Math.round(boardEl.scrollLeft / w)));
+        if (idx !== state.boardIdx) {
+          state.boardIdx = idx;
+          var dots = document.querySelectorAll("#boardDots .bdot");
+          dots.forEach(function (d, i) { d.classList.toggle("active", i === idx); });
+        }
+      }, { passive: true });
+    }
 
     if (!initFirebase()) {
       $("loginBtn").disabled = true;
