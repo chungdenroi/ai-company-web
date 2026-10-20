@@ -99,12 +99,26 @@ Gói Spark không có Firebase Storage nên tệp được lưu ngay trong Fires
 
 `{checkIntervalMinutes}` — số phút giữa mỗi lần nhân viên phải kiểm tra phòng họp (mặc định 10). Chỉ Giám đốc sửa được; thẻ cài đặt ghi rõ: **"Áp dụng cho tất cả nhân viên — mỗi nhân viên phải vào phòng họp kiểm tra tin nhắn để nhận việc theo chu kỳ này"**.
 
-**Check-in tự động áp dụng cho mọi tài khoản đăng nhập được** (không chỉ Giám đốc): sau khi đăng nhập và lặp lại theo đúng chu kỳ này khi trang đang mở, web cập nhật `lastCheckAt` + `status: "Đang hoạt động"` vào hồ sơ `employees` của người đang đăng nhập. Từ đó hệ thống suy ra trạng thái của từng nhân viên:
+**Check-in tự động áp dụng cho mọi tài khoản đăng nhập được** (không chỉ Giám đốc): chạy **ngay khi đăng nhập xong**, lặp lại theo đúng chu kỳ khi trang đang mở, và chạy lại mỗi khi người dùng quay lại tab (sự kiện focus / visibilitychange, chống ghi dồn 20 giây). Hồ sơ của người đăng nhập được nhận diện theo `loginEmail` (chuẩn hoá chữ thường, có quét dự phòng không phân biệt hoa/thường). Web cập nhật `lastCheckAt` + `status: "Đang hoạt động"` vào hồ sơ `employees` của người đang đăng nhập. Từ đó hệ thống suy ra trạng thái của từng nhân viên bằng **một hàm hiện diện duy nhất** (hiển thị đồng nhất ở header, Tổng quan, thẻ nhân viên, cây tổ chức, treeview và hồ sơ chi tiết):
 
-- **Hiện diện** (khu "Đang trực tuyến / hoạt động gần đây" ở Tổng quan): `lastCheckAt` trong vòng chu kỳ + 2 phút = đang trực tuyến (chấm xanh); còn lại hiện "hoạt động X phút trước", kèm dòng đang làm gì.
-- **Trạng thái kiểm tra** (tab Nhân viên + hồ sơ chi tiết): nhân viên đã kích hoạt (`provisioning` khác `"pending"`) mà chưa từng check-in hoặc lần check-in gần nhất cách đây lâu hơn chu kỳ → nhãn cảnh báo đỏ **"Quá hạn kiểm tra"**; nhân viên đang chờ kích hoạt → nhãn **"Chờ mở trình duyệt"** thay vì quá hạn; còn lại → **"Kiểm tra đúng hạn"**.
+- **Đang trực tuyến**: `lastCheckAt` trong vòng chu kỳ + 2 phút ân hạn (ân hạn tránh nhấp nháy trạng thái giữa hai lần check-in). Header luôn hiện chip của chính mình: "Đang trực tuyến · kiểm tra lúc HH:MM" kèm avatar.
+- **Hoạt động X phút/giờ/ngày trước**: đã từng vào nhưng quá cửa sổ trực tuyến.
+- **Chưa từng vào phòng họp**: `lastCheckAt` trống — không để trống khó hiểu.
+- **Trạng thái kiểm tra** (chip ở thẻ nhân viên, cây, hồ sơ): quá chu kỳ → **"Quá hạn kiểm tra"** (đỏ); đang chờ kích hoạt (`provisioning: "pending"`) → **"Chờ mở trình duyệt"**; chưa từng vào → **"Chưa từng vào phòng họp"**; còn lại → **"Kiểm tra đúng hạn"**.
+- Các nhãn thời gian tự làm mới mỗi **30 giây**, không cần tải lại trang. Số "Đang hoạt động" ở Tổng quan cũng đếm theo hiện diện trực tuyến thật, không theo trường trạng thái lưu cũ.
 
 **Chuông thông báo ở header**: số đếm = việc `Chờ nhận` giao cho tôi + việc `Chờ duyệt` (nếu tôi là Giám đốc/Phó giám đốc) + tin phòng họp chưa đọc. Bấm chuông mở danh sách; bấm từng mục nhảy tới tab tương ứng.
+
+## Trải nghiệm di động (màn hình ≤ 760px)
+
+Giao diện mobile dùng thang thị giác riêng kiểu app quản trị di động, không phải bản desktop thu nhỏ:
+
+- Font cơ sở 15px; thẻ padding 10–12px; avatar 32–38px; chip/thẻ trạng thái nhỏ gọn; khoảng cách khối 8–12px.
+- **Thanh điều hướng dưới cố định** đủ 6 mục (Tổng quan, Sơ đồ, Phòng họp, Công việc, Nhân viên, Cài đặt) với nhãn chữ nhỏ, tôn trọng vùng an toàn iPhone (`env(safe-area-inset-bottom)`, `viewport-fit=cover`); header trên cùng thu mỏng (tên công ty + chip trạng thái của mình + chuông + avatar của mình), ẩn dòng tên–chức vụ dài.
+- Tổng quan: thẻ nhân viên thành hàng danh sách gọn (avatar nhỏ, việc đang làm 1 dòng), khu hiện diện là **hàng avatar ngang** cuộn được.
+- Công việc: hiển thị **1 cột tại 1 thời điểm**, vuốt ngang có snap giữa 4 cột kèm **chấm chỉ thị cột** ở dưới (bấm chấm để nhảy cột).
+- Modal (hồ sơ nhân viên, chi tiết việc) thành **bottom sheet**: trượt từ dưới, bo góc trên, cao tối đa 92% màn hình, cuộn bên trong.
+- Ô soạn tin phòng họp dính ngay phía trên thanh điều hướng dưới, không bị che.
 
 ## Cách deploy lên GitHub Pages
 
