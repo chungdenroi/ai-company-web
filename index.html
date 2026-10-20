@@ -583,6 +583,84 @@
     .profile-card h3{margin:14px 0 6px; font-size:.95rem}
   }
 
+  /* ===== Tinh chỉnh mobile đợt 2 (theo ảnh Chủ tịch chụp): composer 2 hàng,
+     panel thông báo trong khung, header 1 hàng, cỡ chữ + khoảng cách gọn ===== */
+  @media (max-width:760px){
+    body{font-size:15px}
+
+    /* Header: ép 1 hàng — logo 36px, tiêu đề 1 dòng ellipsis ~16.5px,
+       chip hiện diện co giãn có ellipsis chủ đích, chuông 40px, avatar 34px,
+       nút Đăng xuất 1 dòng nowrap */
+    header.topbar{padding:8px 12px; gap:8px}
+    header.topbar .brand{flex:0 1 auto; min-width:0; gap:8px}
+    header.topbar .brand .brand-mark{width:36px; height:36px; border-radius:10px; font-size:17px}
+    header.topbar .brand .brand-name{font-size:16.5px; white-space:nowrap; overflow:hidden;
+      text-overflow:ellipsis; min-width:0}
+    header.topbar .userbox{flex:1 1 auto; min-width:0; justify-content:flex-end; gap:6px}
+    .self-status{max-width:44vw; font-size:11px; padding:4px 9px; gap:5px}
+    .self-status .ss-text{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
+    .bell-btn{width:40px; height:40px; border-radius:11px}
+    .self-avatar .avatar{width:34px; height:34px; font-size:.85rem}
+    #logoutBtn{white-space:nowrap; flex:0 0 auto; font-size:13.5px; padding:6px 10px; min-height:38px}
+
+    /* Panel thông báo: cố định trong khung màn hình (không tràn mép),
+       cao tối đa 70vh, cuộn bên trong panel */
+    .bell-panel{position:fixed; top:60px; left:12px; right:12px; width:auto;
+      max-height:70vh; overflow-y:auto; overflow-x:hidden}
+
+    /* Phòng họp: tên người gửi 15px, nội dung 15.5px/1.45, meta 12.5px,
+       giờ nằm ngang cùng hàng meta (margin-left:auto sẵn có), thẻ tin padding 14px */
+    .msg{padding:14px}
+    .msg .meta{flex-wrap:nowrap; align-items:center; gap:4px 7px}
+    .msg .sender{font-size:15px; white-space:nowrap; flex:0 0 auto}
+    .msg .title{font-size:12.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0}
+    .msg .meta .kind,.msg .meta .chip{flex:0 0 auto}
+    .msg .time{font-size:12.5px; white-space:nowrap; flex:0 0 auto}
+    .msg .content{font-size:15.5px; line-height:1.45}
+
+    /* Ô soạn tin xếp 2 hàng: hàng 1 = select loại tin (gọn, theo nội dung, tối đa 55%);
+       hàng 2 = nút đính kèm + ô nhập (flex:1, tối thiểu 44px, tối đa 120px) + nút Gửi */
+    .composer .c-row{display:grid; grid-template-columns:auto 1fr auto;
+      grid-template-areas:"kind kind kind" "attach input send"; align-items:end}
+    .composer select{grid-area:kind; justify-self:start; width:auto; max-width:55%;
+      height:38px; min-height:38px; padding:6px 10px; font-size:14px}
+    .composer textarea{grid-area:input; width:100%; min-height:44px; max-height:120px; resize:none}
+    .composer .attach-btn{grid-area:attach; width:44px; height:44px}
+    .composer #msgSendBtn{grid-area:send; min-height:44px}
+
+    /* Thanh điều hướng dưới: nhãn 10.5px 1 dòng, icon 21px, vùng chạm vẫn ≥44px */
+    nav.tabs{left:8px; right:8px; padding:5px; gap:0}
+    nav.tabs .tab{font-size:10.5px; line-height:1.15; white-space:nowrap; min-width:0;
+      overflow:hidden; letter-spacing:-.02em; padding:4px 1px}
+    nav.tabs .tab svg{width:21px; height:21px}
+  }
+
+  /* ===== Bảo mật 2FA: cổng xác minh + thẻ bảo mật + trình bật 2FA ===== */
+  #gateView{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+    background:linear-gradient(180deg,#F4F2ED 0%,#EDEBE6 100%)}
+  #gateView .btn[type="submit"], #gateForm .btn.primary{width:100%; margin-top:16px}
+  #gateCode{font-size:1.2rem; font-weight:700; letter-spacing:2px; text-align:center}
+  .check-row{display:flex; align-items:center; gap:9px; font-weight:600; margin:14px 0 0; cursor:pointer; font-size:.95rem}
+  .check-row input{width:20px; height:20px; flex:0 0 auto; margin:0; accent-color:var(--green)}
+  .tf-steps{display:flex; gap:6px; flex-wrap:wrap; margin:14px 40px 4px 0}
+  .tf-step-chip{display:inline-flex; align-items:center; gap:7px; font-size:.8rem; font-weight:700;
+    color:var(--muted); background:#F2F4F7; border-radius:999px; padding:4px 11px 4px 5px}
+  .tf-step-chip .n{width:22px; height:22px; border-radius:50%; background:#D6D3CB; color:#fff;
+    display:inline-flex; align-items:center; justify-content:center; font-size:.78rem; font-weight:800}
+  .tf-step-chip.active{background:var(--green-tint); color:var(--green-dark)}
+  .tf-step-chip.active .n{background:var(--green)}
+  .tf-step-chip.done{background:var(--green-tint); color:var(--green-dark)}
+  .tf-step-chip.done .n{background:var(--green-dark)}
+  .tf-h{margin:16px 0 6px; font-size:1.05rem; color:var(--text)}
+  .tf-secret{font-size:1.08rem; background:var(--warm); border:1px dashed #D6D3CB; border-radius:12px;
+    padding:13px 10px; text-align:center; word-break:break-all; letter-spacing:2px; font-weight:700; margin:10px 0 4px}
+  .tf-qr{display:flex; justify-content:center; padding:8px 0 2px}
+  .tf-qr canvas{background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow-sm)}
+  .tf-codes{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 4px}
+  .tf-code{background:var(--warm); border:1px solid var(--border); border-radius:10px; padding:10px 6px;
+    text-align:center; font-weight:800; letter-spacing:1.5px; font-size:1.02rem}
+  .tf-nav{display:flex; gap:10px; margin-top:18px}
+  .tf-nav .btn{flex:1}
 </style>
 </head>
 <body>
@@ -614,6 +692,27 @@
     Hãy nhờ Giám đốc đăng ký hồ sơ cho bạn trong tab Nhân viên (email đăng nhập phải trùng hồ sơ), hoặc đăng nhập bằng tài khoản khác.</p>
     <button id="noProfileLogout" class="btn primary" style="width:100%">Đăng xuất</button>
   </div>
+</main>
+
+<!-- Màn hình cổng xác minh 2 lớp (chỉ tài khoản Giám đốc khi đã bật 2FA) -->
+<main id="gateView" class="hidden">
+  <form id="gateForm" class="card login-card" autocomplete="off">
+    <div class="login-mark">E</div>
+    <h1>Xác minh 2 lớp</h1>
+    <p class="sub">Tài khoản Giám đốc đang bật xác minh 2 lớp. Nhập mã 6 số trong ứng dụng xác thực, hoặc một mã khôi phục chưa dùng.</p>
+    <div id="gatePasswordWrap" class="hidden">
+      <label for="gatePassword">Mật khẩu của bạn (để mở khoá bảo mật)</label>
+      <input type="password" id="gatePassword" autocomplete="current-password" placeholder="Nhập lại mật khẩu">
+    </div>
+    <label for="gateCode">Mã xác minh</label>
+    <input type="text" id="gateCode" inputmode="text" autocomplete="one-time-code" placeholder="6 số hoặc mã khôi phục">
+    <label class="check-row"><input type="checkbox" id="gateRemember"> Ghi nhớ thiết bị này 7 ngày</label>
+    <p id="gateError" class="error hidden"></p>
+    <p id="gateHint" class="hint hidden" style="margin-top:10px"></p>
+    <button type="submit" id="gateBtn" class="btn primary">Xác minh</button>
+    <button type="button" id="gateRetry" class="btn ghost hidden" style="width:100%; margin-top:10px">Tải lại trang</button>
+    <button type="button" id="gateLogout" class="btn ghost" style="width:100%; margin-top:10px">Đăng xuất</button>
+  </form>
 </main>
 
 <!-- Khung ứng dụng sau đăng nhập -->
@@ -848,6 +947,26 @@
         <p id="passwordMsg" class="ok-text hidden"></p>
         <button id="passwordSave" class="btn primary" type="button" style="margin-top:14px">Đổi mật khẩu</button>
       </div>
+
+      <div class="card settings-card hidden" id="securityCard">
+        <h2>Bảo mật tài khoản Giám đốc</h2>
+        <p class="hint" style="margin:0">Xác minh 2 lớp (2FA) bằng ứng dụng xác thực (Google Authenticator, Microsoft Authenticator, Authy…). Chỉ áp dụng cho tài khoản Giám đốc. Bí mật xác thực được mã hoá bằng chính mật khẩu của bạn (PBKDF2 + AES-GCM) — hệ thống không lưu mã thô, kể cả khi dữ liệu bị đọc trộm cũng không dùng được.</p>
+        <p style="margin:12px 0 4px">Trạng thái: <b id="secStatus">Đang tải…</b></p>
+        <p id="secRecoveryInfo" class="hint hidden" style="margin:0 0 4px"></p>
+        <p id="secCardMsg" class="success hidden"></p>
+        <p id="secCardError" class="error hidden"></p>
+        <button id="secEnableBtn" class="btn primary hidden" type="button" style="margin-top:10px">Bật xác minh 2 lớp</button>
+        <div id="secDisableWrap" class="hidden">
+          <h3 class="tf-h">Tắt xác minh 2 lớp</h3>
+          <p class="hint" style="margin:0">Để tắt, nhập mật khẩu hiện tại và một mã xác thực đang hiệu lực (mã 6 số trong ứng dụng xác thực, hoặc một mã khôi phục chưa dùng). Tắt xong, bí mật xác thực và toàn bộ mã khôi phục sẽ bị xoá.</p>
+          <label for="secDisablePw">Mật khẩu hiện tại</label>
+          <input type="password" id="secDisablePw" autocomplete="current-password" placeholder="Mật khẩu hiện tại">
+          <label for="secDisableCode">Mã xác thực</label>
+          <input type="text" id="secDisableCode" autocomplete="one-time-code" placeholder="6 số hoặc mã khôi phục">
+          <button id="secDisableBtn" class="btn primary" type="button" style="margin-top:14px">Tắt xác minh 2 lớp</button>
+        </div>
+        <p class="hint" style="margin-top:14px">Lưu ý: khoá mã hoá của 2FA gắn với mật khẩu Giám đốc. Nếu bạn đổi mật khẩu ở mục “Đổi mật khẩu của tôi” phía trên, mã trong ứng dụng xác thực sẽ không mở được khoá nữa — khi đó hãy dùng mã khôi phục để qua cổng, rồi tắt và bật lại 2FA tại đây để đồng bộ.</p>
+      </div>
     </section>
   </main>
     </div>
@@ -867,6 +986,61 @@
   <div class="modal-card profile-card">
     <button class="modal-close" id="taskClose" type="button" aria-label="Đóng chi tiết việc">✕</button>
     <div id="taskBody"></div>
+  </div>
+</div>
+
+<!-- Trình bật xác minh 2 lớp cho Giám đốc (4 bước) -->
+<div id="twofaModal" class="modal-overlay hidden">
+  <div class="modal-card">
+    <button class="modal-close" id="tfClose" type="button" aria-label="Đóng trình bật 2FA">✕</button>
+    <h2 style="margin:0; font-size:1.3rem">Bật xác minh 2 lớp</h2>
+    <div class="tf-steps" id="tfStepsBar">
+      <span class="tf-step-chip" data-tfdot="1"><span class="n">1</span> Mật khẩu mạnh</span>
+      <span class="tf-step-chip" data-tfdot="2"><span class="n">2</span> Thêm ứng dụng</span>
+      <span class="tf-step-chip" data-tfdot="3"><span class="n">3</span> Xác nhận mã</span>
+      <span class="tf-step-chip" data-tfdot="4"><span class="n">4</span> Mã khôi phục</span>
+    </div>
+
+    <div id="tfStep1">
+      <h3 class="tf-h">Bước 1 — Đặt mật khẩu mạnh mới</h3>
+      <p class="hint" style="margin:0">2FA dùng chính mật khẩu của bạn làm khoá mã hoá bí mật xác thực, nên trước hết hãy đặt một mật khẩu mạnh mới (ít nhất 10 ký tự, gồm cả chữ và số).</p>
+      <label for="tfCurPw">Mật khẩu hiện tại</label>
+      <input type="password" id="tfCurPw" autocomplete="current-password" placeholder="Mật khẩu hiện tại">
+      <label for="tfNewPw">Mật khẩu mới</label>
+      <input type="password" id="tfNewPw" autocomplete="new-password" placeholder="Ít nhất 10 ký tự, gồm chữ và số">
+      <label for="tfNewPw2">Nhập lại mật khẩu mới</label>
+      <input type="password" id="tfNewPw2" autocomplete="new-password" placeholder="Nhập lại mật khẩu mới">
+      <p id="tfError1" class="error hidden"></p>
+      <div class="tf-nav"><button id="tfNext1" class="btn primary" type="button">Đổi mật khẩu &amp; tiếp tục</button></div>
+    </div>
+
+    <div id="tfStep2" class="hidden">
+      <h3 class="tf-h">Bước 2 — Thêm vào ứng dụng xác thực</h3>
+      <p class="hint" style="margin:0">Mở ứng dụng xác thực (Google Authenticator, Microsoft Authenticator, Authy…), chọn thêm tài khoản rồi quét mã QR dưới đây. Nếu không quét được, nhập thủ công mã bí mật.</p>
+      <div class="tf-qr"><canvas id="tfQr" width="232" height="232"></canvas></div>
+      <p class="hint" style="text-align:center; margin:6px 0 0">Mã bí mật (nhập tay khi không quét được QR):</p>
+      <p class="tf-secret mono" id="tfSecretText"></p>
+      <p id="tfError2" class="error hidden"></p>
+      <div class="tf-nav"><button id="tfNext2" class="btn primary" type="button">Đã thêm — tiếp tục</button></div>
+    </div>
+
+    <div id="tfStep3" class="hidden">
+      <h3 class="tf-h">Bước 3 — Xác nhận mã từ ứng dụng</h3>
+      <p class="hint" style="margin:0">Nhập mã 6 số đang hiển thị trong ứng dụng xác thực cho tài khoản Enteesee để chắc chắn đã thêm đúng.</p>
+      <label for="tfCode">Mã 6 số</label>
+      <input type="text" id="tfCode" inputmode="numeric" autocomplete="one-time-code" placeholder="000000" style="font-size:1.2rem; font-weight:700; letter-spacing:3px; text-align:center">
+      <p id="tfError3" class="error hidden"></p>
+      <div class="tf-nav"><button id="tfNext3" class="btn primary" type="button">Xác nhận mã</button></div>
+    </div>
+
+    <div id="tfStep4" class="hidden">
+      <h3 class="tf-h">Bước 4 — Lưu mã khôi phục</h3>
+      <p class="hint" style="margin:0">Mỗi mã dưới đây dùng được <b>một lần duy nhất</b> để qua cổng khi bạn mất ứng dụng xác thực. Các mã chỉ hiển thị lần này — hãy chép lại hoặc chụp màn hình và cất nơi an toàn.</p>
+      <div class="tf-codes" id="tfCodes"></div>
+      <label class="check-row"><input type="checkbox" id="tfSavedChk"> Tôi đã lưu 10 mã khôi phục vào nơi an toàn</label>
+      <p id="tfError4" class="error hidden"></p>
+      <div class="tf-nav"><button id="tfFinish" class="btn primary" type="button" disabled>Hoàn tất bật 2FA</button></div>
+    </div>
   </div>
 </div>
 
