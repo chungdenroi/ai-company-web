@@ -40,6 +40,7 @@
     mentionUI: null,       // {start, items, active} của hộp gợi ý @tag trong ô soạn tin
     highlightMsgId: null,  // id tin đang được làm nổi bật sau khi bấm từ chuông thông báo
     highlightTimer: null,
+    security: null,        // dữ liệu doc settings/security (chỉ nạp cho tài khoản Giám đốc)
     unsub: []
   };
 
@@ -164,20 +165,46 @@
     return { byId: byId, children: children, roots: roots };
   }
 
-  /* Trạng thái kiểm tra phòng họp: luật áp dụng cho TẤT CẢ nhân viên.
+  /* Mốc hoạt động gần nhất của một nhân viên — suy từ MỌI dấu vết ứng dụng đã tải:
+     - lastCheckAt: lần điểm danh khi chính người đó mở giao diện web;
+     - tin nhắn gần nhất người đó gửi trong phòng họp (messages: senderId + createdAt);
+     - bình luận gần nhất của người đó trong công việc (tasks[].comments: authorId + createdAt);
+     - hoạt động gần nhất trong nhật ký (activities: actorId + createdAt — chỉ nạp 12 mục mới nhất).
+     Nhân viên AI làm việc qua kênh riêng (gửi tin thẳng vào hệ thống, không mở giao
+     diện web) nên lastCheckAt thường trống; chỉ mốc MỚI NHẤT trong các dấu vết
+     trên mới phản ánh đúng hoạt động thật. Trả về {ms, ts} của dấu vết mới nhất,
+     hoặc null khi thật sự không có bất kỳ dấu vết nào. */
+  function lastActivityOf(e) {
+    if (!e) return null;
+    var bestMs = null, bestTs = null;
+    function consider(ts) {
+      var ms = tsMillis(ts);
+      if (ms !== null && (bestMs === null || ms > bestMs)) { bestMs = ms; bestTs = ts; }
+    }
+    consider(e.lastCheckAt);
+    state.messages.forEach(function (m) { if (m.senderId === e.id) consider(m.createdAt); });
+    state.tasks.forEach(function (t) {
+      (t.comments || []).forEach(function (c) { if (c.authorId === e.id) consider(c.createdAt); });
+    });
+    state.activities.forEach(function (a) { if (a.actorId === e.id) consider(a.createdAt); });
+    return bestMs === null ? null : { ms: bestMs, ts: bestTs };
+  }
+
+  /* Trạng thái kiểm tra phòng họp: luật áp dụng cho TẤT CẢ nhân viên, tính trên
+     mốc hoạt động suy ra (lastActivityOf) thay vì chỉ lastCheckAt.
      - provisioning "pending": Chờ mở trình duyệt
-     - chưa từng có lastCheckAt: Chưa từng vào phòng họp
+     - không có bất kỳ dấu vết hoạt động nào: Chưa từng vào phòng họp
      - quá chu kỳ: Quá hạn kiểm tra. Đúng chu kỳ: Kiểm tra đúng hạn */
   function checkInfo(e) {
     if (e.provisioning === "pending") {
       return { kind: "wait", text: "Chờ mở trình duyệt", cls: "chip check-wait" };
     }
     var iv = state.checkIntervalMinutes || 10;
-    var last = tsMillis(e.lastCheckAt);
-    if (!last) {
+    var act = lastActivityOf(e);
+    if (!act) {
       return { kind: "never", text: "Chưa từng vào phòng họp", cls: "chip check-wait" };
     }
-    if ((Date.now() - last) > iv * 60000) {
+    if ((Date.now() - act.ms) > iv * 60000) {
       return { kind: "late", text: "Quá hạn kiểm tra", cls: "chip check-late" };
     }
     return { kind: "ok", text: "Kiểm tra đúng hạn", cls: "chip check-ok" };
@@ -188,10 +215,13 @@
     return '<span class="' + ci.cls + '">' + ci.text + '</span>';
   }
 
-  /* Hiện diện: MỘT hàm suy trạng thái duy nhất từ lastCheckAt, dùng ở mọi nơi
+  /* Hiện diện: MỘT hàm suy trạng thái duy nhất, dùng ở mọi nơi
      (header, dải hiện diện, thẻ nhân viên, cây tổ chức, hồ sơ chi tiết).
-     Trực tuyến nếu lần kiểm tra gần nhất trong vòng chu kỳ + 2 phút ân hạn —
-     ân hạn này tránh chấm trạng thái nhấp nháy giữa hai lần check-in liên tiếp. */
+     Mốc hoạt động lấy từ lastActivityOf — mốc MỚI NHẤT trong: điểm danh web
+     (lastCheckAt), tin nhắn phòng họp, bình luận công việc, nhật ký hoạt động —
+     vì nhân viên AI hoạt động qua kênh riêng nên không có mốc điểm danh web.
+     Trực tuyến nếu hoạt động trong vòng max(2 × chu kỳ kiểm tra, 6 phút);
+     chỉ báo "Chưa từng vào phòng họp" khi không có bất kỳ dấu vết nào. */
   function presenceOf(e) {
     var iv = state.checkIntervalMinutes || 10;
     if (e.suspended) {
@@ -200,15 +230,15 @@
     if (e.provisioning === "pending") {
       return { state: "pending", online: false, dot: "dot off", label: "Chờ mở trình duyệt", sub: "Chưa kích hoạt tài khoản" };
     }
-    var last = tsMillis(e.lastCheckAt);
-    if (!last) {
+    var act = lastActivityOf(e);
+    if (!act) {
       return { state: "never", online: false, dot: "dot off", label: "Chưa từng vào phòng họp", sub: "" };
     }
-    var age = Date.now() - last;
-    if (age <= (iv + 2) * 60000) {
-      return { state: "online", online: true, dot: "dot on", label: "Đang trực tuyến", sub: "Kiểm tra lúc " + fmtClock(e.lastCheckAt) };
+    var age = Date.now() - act.ms;
+    if (age <= Math.max(2 * iv, 6) * 60000) {
+      return { state: "online", online: true, dot: "dot on", label: "Đang trực tuyến", sub: "Kiểm tra lúc " + fmtClock(act.ts) };
     }
-    return { state: "recent", online: false, dot: "dot late", label: "Hoạt động " + fmtRel(e.lastCheckAt) + " trước", sub: fmtTime(e.lastCheckAt) };
+    return { state: "recent", online: false, dot: "dot late", label: "Hoạt động " + fmtRel(act.ts) + " trước", sub: fmtTime(act.ts) };
   }
   function statusDot(e) {
     return presenceOf(e).dot;
@@ -332,8 +362,13 @@
     var btn = $("loginBtn");
     btn.disabled = true;
     btn.textContent = "Đang đăng nhập...";
+    /* Giữ mật khẩu vừa nhập trong bộ nhớ phiên trang: cổng 2FA của Giám đốc cần nó
+       để mở khoá bí mật xác thực (khoá suy từ mật khẩu). Xoá ngay khi đăng nhập lỗi,
+       đăng xuất, hoặc đã qua cổng. */
+    gatePassword = pw;
     auth.signInWithEmailAndPassword(email, pw)
       .catch(function (err) {
+        gatePassword = null;
         errBox.textContent = loginErrorText(err);
         errBox.classList.remove("hidden");
       })
@@ -348,6 +383,7 @@
     stopCheckin();
     stopClock();
     closeBell();
+    clearGateState();
     if (auth) auth.signOut();
   }
 
@@ -405,11 +441,14 @@
   /* ---------- Vào / ra ứng dụng ---------- */
   function enterApp() {
     $("loginView").classList.add("hidden");
+    $("gateView").classList.add("hidden");
     $("noProfileView").classList.add("hidden");
     $("appView").classList.remove("hidden");
     $("currentUserLabel").textContent = state.me.name + " — " + state.me.title;
     $("taskForm").classList.toggle("hidden", !canManage());
     $("empFormCard").classList.toggle("hidden", !isDirector());
+    $("securityCard").classList.toggle("hidden", !isDirectorAccount());
+    if (isDirectorAccount()) renderSecurityCard();
     var canEdit = isDirector();
     $("intervalInput").disabled = !canEdit;
     $("intervalSave").disabled = !canEdit;
@@ -430,13 +469,17 @@
       return;
     }
     var mine = state.me.realDoc ? empById(state.me.id) : null;
-    var lastMs = mine ? tsMillis(mine.lastCheckAt) : null;
-    if (!lastMs && state.lastCheckinAt) lastMs = state.lastCheckinAt;
+    var act = mine ? lastActivityOf(mine) : null;
+    var lastMs = act ? act.ms : null;
+    var lastTs = act ? act.ts : null;
+    if (state.lastCheckinAt && (lastMs === null || state.lastCheckinAt > lastMs)) {
+      lastMs = state.lastCheckinAt; lastTs = state.lastCheckinAt;
+    }
     var label;
-    if (lastMs) label = "Đang trực tuyến · kiểm tra lúc " + fmtClock(lastMs);
+    if (lastMs) label = "Đang trực tuyến · kiểm tra lúc " + fmtClock(lastTs);
     else if (state.me.realDoc) label = "Đang trực tuyến · đang điểm danh…";
     else label = "Đang trực tuyến";
-    chip.innerHTML = '<span class="dot on"></span>' + esc(label);
+    chip.innerHTML = '<span class="dot on"></span><span class="ss-text">' + esc(label) + "</span>";
     chip.classList.remove("hidden");
     if (av) {
       var src = mine || { name: state.me.name, color: "#4f46e5" };
@@ -448,9 +491,12 @@
   function showLogin() {
     state.user = null;
     state.me = null;
+    state.security = null;
     state.messages = []; state.tasks = []; state.employees = []; state.activities = [];
     state.pendingFiles = [];
+    clearGateState();
     $("appView").classList.add("hidden");
+    $("gateView").classList.add("hidden");
     $("noProfileView").classList.add("hidden");
     $("loginView").classList.remove("hidden");
     renderSelfStatus();
@@ -1566,7 +1612,8 @@
     var list = state.employees.slice().sort(function (a, b) {
       var pa = presenceOf(a), pb = presenceOf(b);
       if (pa.online !== pb.online) return pa.online ? -1 : 1;
-      return (tsMillis(b.lastCheckAt) || 0) - (tsMillis(a.lastCheckAt) || 0);
+      var am = lastActivityOf(a), bm = lastActivityOf(b);
+      return (bm ? bm.ms : 0) - (am ? am.ms : 0);
     });
     box.innerHTML = list.map(function (e) {
       var p = presenceOf(e);
@@ -1696,6 +1743,7 @@
     var director = isDirector();
     box.innerHTML = state.employees.map(function (e) {
       var mgr = e.managerId ? empById(e.managerId) : null;
+      var act = lastActivityOf(e);
       var actions = '<div class="a-actions">' +
         '<button class="btn ghost small" type="button" data-profile="' + esc(e.id) + '">Xem hồ sơ</button>';
       if (director) {
@@ -1722,7 +1770,7 @@
           "<dt>Hồ sơ trình duyệt</dt><dd>" + esc(e.browserProfile || "—") + "</dd>" +
           "<dt>Email đăng nhập</dt><dd>" + esc(e.loginEmail || "—") + "</dd>" +
           "<dt>Mã truy cập</dt><dd class=\"mono\">" + esc(e.accessCode || "—") + "</dd>" +
-          "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)" : "Chưa từng vào phòng họp") + "</dd>" +
+          "<dt>Hoạt động gần nhất</dt><dd>" + (act ? esc(fmtTime(act.ts)) + " (" + esc(fmtRel(act.ts)) + " trước)" : "Chưa từng vào phòng họp") + "</dd>" +
           "<dt>Kích hoạt</dt><dd>" + (e.provisioning === "pending" ? "Chờ mở trình duyệt (provisioning: pending)" : "Đã kích hoạt") + "</dd>" +
         "</dl>" +
         actions +
@@ -1978,6 +2026,7 @@
     var given = state.tasks.filter(function (t) { return t.assignerId === e.id; }).length;
     var sent = state.messages.filter(function (m) { return m.senderId === e.id; }).length;
     var p = presenceOf(e);
+    var act = lastActivityOf(e);
 
     var subsHtml = subs.length
       ? '<div class="sub-list">' + subs.map(function (s) {
@@ -2009,13 +2058,12 @@
         "<dt>Cấp bậc</dt><dd>" + esc(e.level || "—") + "</dd>" +
         "<dt>Vai trò</dt><dd>" + esc(e.role || "—") + "</dd>" +
         "<dt>Hiện diện</dt><dd>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</dd>" +
-        "<dt>Trạng thái</dt><dd>" + esc(e.status || "—") + (e.suspended ? " (đang tạm ngưng)" : "") + "</dd>" +
         "<dt>Đang làm</dt><dd>" + esc(e.currentWork || "—") + "</dd>" +
         "<dt>Cấp trên</dt><dd>" + (mgr
           ? '<button class="link-btn" type="button" data-profile="' + esc(mgr.id) + '">' + esc(mgr.name) + "</button>"
           : "— Cấp cao nhất") + "</dd>" +
-        "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt
-          ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)"
+        "<dt>Hoạt động gần nhất</dt><dd>" + (act
+          ? esc(fmtTime(act.ts)) + " (" + esc(fmtRel(act.ts)) + " trước)"
           : "Chưa từng vào phòng họp") + "</dd>" +
         "<dt>Trạng thái kiểm tra</dt><dd>" + (e.suspended ? "Đang tạm ngưng" : esc(checkInfo(e).text)) + "</dd>" +
         "<dt>Kích hoạt</dt><dd>" + (e.provisioning === "pending" ? "Chờ mở trình duyệt (provisioning: pending)" : "Đã kích hoạt") + "</dd>" +
@@ -2092,6 +2140,870 @@
       });
   }
 
+  /* ==================================================================
+     BẢO MẬT XÁC MINH ADMIN — 2FA cho riêng tài khoản Giám đốc
+     - TOTP RFC 6238 (HMAC-SHA-1, cửa sổ 30s, lệch ±1 cửa sổ)
+     - Bí mật TOTP mã hoá PBKDF2-SHA256 (210.000 vòng) + AES-GCM bằng mật khẩu
+       Giám đốc, lưu trong settings/security (directorTotpEnc) — không lưu thô
+     - 10 mã khôi phục dùng 1 lần, chỉ lưu SHA-256 hash (recoveryHashes)
+     - Mã QR tự sinh trong file (không tải thư viện ngoài)
+     ================================================================== */
+
+  /* === 2FA-CORE-BEGIN === */
+  var subtleCrypto = (typeof globalThis !== "undefined" && globalThis.crypto && globalThis.crypto.subtle)
+    ? globalThis.crypto : null;
+
+  function bytesToB64(bytes) {
+    var ALPH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var out = "";
+    for (var i = 0; i < bytes.length; i += 3) {
+      var b0 = bytes[i], b1 = i + 1 < bytes.length ? bytes[i + 1] : 0, b2 = i + 2 < bytes.length ? bytes[i + 2] : 0;
+      out += ALPH[(b0 >> 2) & 63] + ALPH[((b0 << 4) | (b1 >> 4)) & 63] +
+        (i + 1 < bytes.length ? ALPH[((b1 << 2) | (b2 >> 6)) & 63] : "=") +
+        (i + 2 < bytes.length ? ALPH[b2 & 63] : "=");
+    }
+    return out;
+  }
+  function b64ToBytes(b64) {
+    var ALPH = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    var s = String(b64 || "").replace(/[^A-Za-z0-9+/=]/g, "");
+    var out = [];
+    for (var i = 0; i + 3 < s.length + 1 && i < s.length; i += 4) {
+      var c0 = ALPH.indexOf(s[i]), c1 = ALPH.indexOf(s[i + 1]);
+      var c2 = s[i + 2] === "=" ? 0 : ALPH.indexOf(s[i + 2]);
+      var c3 = s[i + 3] === "=" ? 0 : ALPH.indexOf(s[i + 3]);
+      out.push(((c0 << 2) | (c1 >> 4)) & 255);
+      if (s[i + 2] !== "=" && s[i + 2] !== undefined) out.push(((c1 << 4) | (c2 >> 2)) & 255);
+      if (s[i + 3] !== "=" && s[i + 3] !== undefined) out.push(((c2 << 6) | c3) & 255);
+    }
+    return new Uint8Array(out);
+  }
+
+  /* ----- Base32 (RFC 4648) ----- */
+  var B32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  function base32Encode(bytes) {
+    var out = "", val = 0, bits = 0;
+    for (var i = 0; i < bytes.length; i++) {
+      val = (val << 8) | bytes[i]; bits += 8;
+      while (bits >= 5) { out += B32_ALPHABET[(val >>> (bits - 5)) & 31]; bits -= 5; }
+    }
+    if (bits > 0) out += B32_ALPHABET[(val << (5 - bits)) & 31];
+    return out;
+  }
+  function base32Decode(str) {
+    var s = String(str || "").toUpperCase().replace(/[\s=]/g, "");
+    var out = [], val = 0, bits = 0;
+    for (var i = 0; i < s.length; i++) {
+      var idx = B32_ALPHABET.indexOf(s.charAt(i));
+      if (idx < 0) continue;
+      val = (val << 5) | idx; bits += 5;
+      if (bits >= 8) { out.push((val >>> (bits - 8)) & 255); bits -= 8; }
+    }
+    return new Uint8Array(out);
+  }
+
+  /* ----- TOTP (RFC 6238, HMAC-SHA-1) ----- */
+  function hmacSha1(keyBytes, msgBytes) {
+    return subtleCrypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-1" }, false, ["sign"])
+      .then(function (key) { return subtleCrypto.subtle.sign("HMAC", key, msgBytes); })
+      .then(function (sig) { return new Uint8Array(sig); });
+  }
+  function totpAt(secretBytes, counter) {
+    var msg = new Uint8Array(8);
+    var c = counter;
+    for (var i = 7; i >= 0; i--) { msg[i] = c % 256; c = Math.floor(c / 256); }
+    return hmacSha1(secretBytes, msg).then(function (mac) {
+      var off = mac[mac.length - 1] & 0x0f;
+      var bin = ((mac[off] & 0x7f) << 24) | ((mac[off + 1] & 0xff) << 16) |
+        ((mac[off + 2] & 0xff) << 8) | (mac[off + 3] & 0xff);
+      var code = bin % 1000000;
+      return ("00000" + code).slice(-6);
+    });
+  }
+  function totpVerify(secretBytes, code, dateMs) {
+    var want = String(code || "").replace(/\D/g, "");
+    if (want.length !== 6) return Promise.resolve(false);
+    var counter = Math.floor((dateMs == null ? Date.now() : dateMs) / 30000);
+    var offsets = [-1, 0, 1], i = 0;
+    function next() {
+      if (i >= offsets.length) return Promise.resolve(false);
+      var off = offsets[i++];
+      return totpAt(secretBytes, counter + off).then(function (gen) {
+        return gen === want ? true : next();
+      });
+    }
+    return next();
+  }
+
+  /* ----- Mã hoá bí mật bằng mật khẩu: PBKDF2-SHA256 + AES-GCM ----- */
+  var TFA_ITERATIONS = 210000;
+  function tfaDeriveKey(password, saltBytes, iterations) {
+    return subtleCrypto.subtle.importKey("raw", new TextEncoder().encode(String(password)), "PBKDF2", false, ["deriveKey"])
+      .then(function (base) {
+        return subtleCrypto.subtle.deriveKey(
+          { name: "PBKDF2", salt: saltBytes, iterations: iterations, hash: "SHA-256" },
+          base, { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]);
+      });
+  }
+  function tfaEncryptSecret(password, secretText) {
+    var salt = subtleCrypto.getRandomValues(new Uint8Array(16));
+    var iv = subtleCrypto.getRandomValues(new Uint8Array(12));
+    return tfaDeriveKey(password, salt, TFA_ITERATIONS).then(function (key) {
+      return subtleCrypto.subtle.encrypt({ name: "AES-GCM", iv: iv }, key, new TextEncoder().encode(String(secretText)));
+    }).then(function (ct) {
+      return {
+        v: 1, kdf: "PBKDF2-SHA256", iter: TFA_ITERATIONS,
+        salt: bytesToB64(salt), iv: bytesToB64(iv), data: bytesToB64(new Uint8Array(ct))
+      };
+    });
+  }
+  function tfaDecryptSecret(password, payload) {
+    if (!payload || !payload.salt || !payload.iv || !payload.data) {
+      return Promise.reject(new Error("directorTotpEnc thiếu trường dữ liệu"));
+    }
+    return tfaDeriveKey(password, b64ToBytes(payload.salt), payload.iter || TFA_ITERATIONS)
+      .then(function (key) {
+        return subtleCrypto.subtle.decrypt({ name: "AES-GCM", iv: b64ToBytes(payload.iv) }, key, b64ToBytes(payload.data));
+      })
+      .then(function (pt) { return new TextDecoder().decode(pt); });
+  }
+
+  /* ----- Mã khôi phục: chỉ lưu SHA-256 hash ----- */
+  function sha256Hex(text) {
+    return subtleCrypto.subtle.digest("SHA-256", new TextEncoder().encode(String(text)))
+      .then(function (h) {
+        var b = new Uint8Array(h), s = "";
+        for (var i = 0; i < b.length; i++) s += ("0" + b[i].toString(16)).slice(-2);
+        return s;
+      });
+  }
+  var RECOVERY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"; /* bỏ 0/O/1/I/L tránh nhầm */
+  function genRecoveryCode() {
+    var chars = [];
+    while (chars.length < 8) {
+      var rnd = subtleCrypto.getRandomValues(new Uint8Array(16));
+      for (var i = 0; i < rnd.length && chars.length < 8; i++) {
+        if (rnd[i] < 248) chars.push(RECOVERY_ALPHABET[rnd[i] % RECOVERY_ALPHABET.length]); /* 248 = 31*8, chống lệch modulo */
+      }
+    }
+    return chars.slice(0, 4).join("") + "-" + chars.slice(4, 8).join("");
+  }
+  function normalizeRecovery(code) {
+    return String(code || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+  }
+  function hashRecovery(code) {
+    return sha256Hex(normalizeRecovery(code));
+  }
+
+  function otpauthUrl(secretB32, accountEmail) {
+    return "otpauth://totp/Enteesee:" + encodeURIComponent(String(accountEmail || "")) +
+      "?secret=" + secretB32 + "&issuer=Enteesee";
+  }
+
+  /* ----- Sinh mã QR (byte mode, mức sửa lỗi M, version 1–10) — tự cài đặt ----- */
+  var QR_GEXP = new Array(512), QR_GLOG = new Array(256);
+  (function () {
+    var x = 1;
+    for (var i = 0; i < 255; i++) { QR_GEXP[i] = x; QR_GLOG[x] = i; x <<= 1; if (x & 0x100) x ^= 0x11d; }
+    for (var j = 255; j < 512; j++) QR_GEXP[j] = QR_GEXP[j - 255];
+  })();
+  function qrGmul(a, b) { return (a && b) ? QR_GEXP[QR_GLOG[a] + QR_GLOG[b]] : 0; }
+  function qrRsGenPoly(nsym) {
+    var poly = [1];
+    for (var i = 0; i < nsym; i++) {
+      var next = new Array(poly.length + 1), k;
+      for (k = 0; k < next.length; k++) next[k] = 0;
+      for (k = 0; k < poly.length; k++) {
+        next[k] ^= qrGmul(poly[k], QR_GEXP[i]);
+        next[k + 1] ^= poly[k];
+      }
+      poly = next;
+    }
+    return poly;
+  }
+  function qrRsEc(dataBytes, nsym) {
+    var gen = qrRsGenPoly(nsym);
+    var work = dataBytes.slice();
+    var i, j;
+    for (i = 0; i < nsym; i++) work.push(0);
+    for (i = 0; i < dataBytes.length; i++) {
+      var coef = work[i];
+      if (coef === 0) continue;
+      for (j = 0; j < gen.length; j++) work[i + j] ^= qrGmul(gen[j], coef);
+    }
+    return work.slice(dataBytes.length);
+  }
+  /* Bảng khối mức M: [ecPerBlock, [số codeword dữ liệu mỗi block]] */
+  var QR_M_BLOCKS = {
+    1: [10, [16]], 2: [16, [28]], 3: [26, [44]], 4: [18, [32, 32]], 5: [24, [43, 43]],
+    6: [16, [27, 27, 27, 27]], 7: [18, [31, 31, 31, 31]], 8: [22, [38, 38, 39, 39]],
+    9: [22, [36, 36, 36, 37, 37]], 10: [26, [43, 43, 43, 43, 44]]
+  };
+  var QR_ALIGN = {
+    1: [], 2: [6, 18], 3: [6, 22], 4: [6, 26], 5: [6, 30], 6: [6, 34],
+    7: [6, 22, 38], 8: [6, 24, 42], 9: [6, 26, 46], 10: [6, 28, 50]
+  };
+  function qrBchDigit(data) { var d = 0; while (data !== 0) { d++; data >>>= 1; } return d; }
+  function qrFormatInfo(ecBits, mask) {
+    var data = (ecBits << 3) | mask;
+    var d = data << 10, g = 0x537;
+    while (qrBchDigit(d) - qrBchDigit(g) >= 0) d ^= (g << (qrBchDigit(d) - qrBchDigit(g)));
+    return ((data << 10) | d) ^ 0x5412;
+  }
+  function qrVersionInfo(version) {
+    var d = version << 12, g = 0x1f25;
+    while (qrBchDigit(d) - qrBchDigit(g) >= 0) d ^= (g << (qrBchDigit(d) - qrBchDigit(g)));
+    return (version << 12) | d;
+  }
+  function qrDataCodewords(bytes, version) {
+    var spec = QR_M_BLOCKS[version];
+    var totalData = 0, i;
+    spec[1].forEach(function (n) { totalData += n; });
+    var bits = [], bitLen = 0;
+    function put(num, len) {
+      for (var k = len - 1; k >= 0; k--) {
+        var pos = bitLen >> 3;
+        if (bits[pos] === undefined) bits[pos] = 0;
+        if ((num >>> k) & 1) bits[pos] |= (1 << (7 - (bitLen & 7)));
+        bitLen++;
+      }
+    }
+    put(4, 4); /* byte mode */
+    put(bytes.length, version < 10 ? 8 : 16);
+    for (i = 0; i < bytes.length; i++) put(bytes[i], 8);
+    var capBits = totalData * 8;
+    var term = Math.min(4, capBits - bitLen);
+    for (i = 0; i < term; i++) put(0, 1);
+    while (bitLen % 8 !== 0) put(0, 1);
+    var pads = [0xec, 0x11], pi = 0;
+    while ((bitLen >> 3) < totalData) { put(pads[pi % 2], 8); pi++; }
+    return bits.slice(0, totalData);
+  }
+  function qrInterleave(dataCw, version) {
+    var spec = QR_M_BLOCKS[version], ecLen = spec[0];
+    var blocks = [], ecs = [], pos = 0, i, j;
+    spec[1].forEach(function (n) {
+      var chunk = dataCw.slice(pos, pos + n);
+      blocks.push(chunk);
+      ecs.push(qrRsEc(chunk, ecLen));
+      pos += n;
+    });
+    var out = [], maxLen = 0;
+    blocks.forEach(function (b) { if (b.length > maxLen) maxLen = b.length; });
+    for (i = 0; i < maxLen; i++) for (j = 0; j < blocks.length; j++) if (i < blocks[j].length) out.push(blocks[j][i]);
+    for (i = 0; i < ecLen; i++) for (j = 0; j < ecs.length; j++) out.push(ecs[j][i]);
+    return out;
+  }
+  function qrMaskBit(mask, r, c) {
+    switch (mask) {
+      case 0: return (r + c) % 2 === 0;
+      case 1: return r % 2 === 0;
+      case 2: return c % 3 === 0;
+      case 3: return (r + c) % 3 === 0;
+      case 4: return (Math.floor(r / 2) + Math.floor(c / 3)) % 2 === 0;
+      case 5: return ((r * c) % 2) + ((r * c) % 3) === 0;
+      case 6: return (((r * c) % 2) + ((r * c) % 3)) % 2 === 0;
+      default: return (((r + c) % 2) + ((r * c) % 3)) % 2 === 0;
+    }
+  }
+  function qrBuildMatrix(version, codewords, mask) {
+    var size = version * 4 + 17;
+    var m = [], r, c, i;
+    for (r = 0; r < size; r++) { m.push([]); for (c = 0; c < size; c++) m[r].push(null); }
+    function probe(row, col) {
+      for (var dr = -1; dr <= 7; dr++) for (var dc = -1; dc <= 7; dc++) {
+        var rr = row + dr, cc = col + dc;
+        if (rr < 0 || rr >= size || cc < 0 || cc >= size) continue;
+        m[rr][cc] = (0 <= dr && dr <= 6 && (dc === 0 || dc === 6)) ||
+          (0 <= dc && dc <= 6 && (dr === 0 || dr === 6)) ||
+          (2 <= dr && dr <= 4 && 2 <= dc && dc <= 4);
+      }
+    }
+    probe(0, 0); probe(size - 7, 0); probe(0, size - 7);
+    var align = QR_ALIGN[version];
+    align.forEach(function (row) {
+      align.forEach(function (col) {
+        if (m[row][col] !== null) return;
+        for (var dr = -2; dr <= 2; dr++) for (var dc = -2; dc <= 2; dc++) {
+          /* vòng ngoài + tâm: tối; vòng giữa: sáng */
+          m[row + dr][col + dc] = (Math.abs(dr) === 2 || Math.abs(dc) === 2 || (dr === 0 && dc === 0));
+        }
+      });
+    });
+    for (i = 8; i < size - 8; i++) {
+      if (m[i][6] === null) m[i][6] = (i % 2 === 0);
+      if (m[6][i] === null) m[6][i] = (i % 2 === 0);
+    }
+    function typeInfo(test, info) {
+      for (var k = 0; k < 15; k++) {
+        var mod = !test && ((info >> k) & 1) === 1;
+        if (k < 6) m[k][8] = mod;
+        else if (k < 8) m[k + 1][8] = mod;
+        else m[size - 15 + k][8] = mod;
+        if (k < 8) m[8][size - k - 1] = mod;
+        else if (k < 9) m[8][15 - k] = mod;
+        else m[8][15 - k - 1] = mod;
+      }
+      m[size - 8][8] = !test;
+    }
+    typeInfo(true, 0); /* giữ chỗ format info trước khi đặt dữ liệu */
+    if (version >= 7) {
+      var vinfo = qrVersionInfo(version);
+      for (i = 0; i < 18; i++) {
+        var vmod = ((vinfo >> i) & 1) === 1;
+        m[Math.floor(i / 3)][(i % 3) + size - 11] = vmod;
+        m[(i % 3) + size - 11][Math.floor(i / 3)] = vmod;
+      }
+    }
+    /* Đặt dữ liệu: zigzag từ góc dưới phải, bỏ qua cột 6 */
+    var inc = -1, row = size - 1, bitIdx = 7, byteIdx = 0;
+    for (var col = size - 1; col > 0; col -= 2) {
+      if (col === 6) col--;
+      while (true) {
+        for (var cc2 = 0; cc2 < 2; cc2++) {
+          var ccol = col - cc2;
+          if (m[row][ccol] === null) {
+            var dark = false;
+            if (byteIdx < codewords.length) dark = ((codewords[byteIdx] >>> bitIdx) & 1) === 1;
+            if (qrMaskBit(mask, row, ccol)) dark = !dark;
+            m[row][ccol] = dark;
+            bitIdx--;
+            if (bitIdx === -1) { byteIdx++; bitIdx = 7; }
+          }
+        }
+        row += inc;
+        if (row < 0 || row >= size) { row -= inc; inc = -inc; break; }
+      }
+    }
+    typeInfo(false, qrFormatInfo(0, mask)); /* 0 = mức sửa lỗi M */
+    return m;
+  }
+  function qrPenalty(m) {
+    var size = m.length, score = 0, r, c, i;
+    function linePenalty(line) {
+      var s = 0, run = 1;
+      for (var k = 1; k < line.length; k++) {
+        if (line[k] === line[k - 1]) run++;
+        else { if (run >= 5) s += 3 + (run - 5); run = 1; }
+      }
+      if (run >= 5) s += 3 + (run - 5);
+      for (var p = 0; p + 11 <= line.length; p++) {
+        var pat1 = [1, 0, 1, 1, 1, 0, 1, 0, 0, 0, 0], pat2 = [0, 0, 0, 0, 1, 0, 1, 1, 1, 0, 1], hit1 = true, hit2 = true;
+        for (var q = 0; q < 11; q++) {
+          var v = line[p + q] ? 1 : 0;
+          if (v !== pat1[q]) hit1 = false;
+          if (v !== pat2[q]) hit2 = false;
+        }
+        if (hit1 || hit2) s += 40;
+      }
+      return s;
+    }
+    for (r = 0; r < size; r++) {
+      var rowLine = [], colLine = [];
+      for (c = 0; c < size; c++) { rowLine.push(m[r][c]); colLine.push(m[c][r]); }
+      score += linePenalty(rowLine) + linePenalty(colLine);
+    }
+    for (r = 0; r < size - 1; r++) for (c = 0; c < size - 1; c++) {
+      if (m[r][c] === m[r][c + 1] && m[r][c] === m[r + 1][c] && m[r][c] === m[r + 1][c + 1]) score += 3;
+    }
+    var dark = 0;
+    for (r = 0; r < size; r++) for (c = 0; c < size; c++) if (m[r][c]) dark++;
+    var percent = dark * 100 / (size * size);
+    var lower = Math.floor(percent / 5) * 5, upper = lower + 5;
+    var k = Math.min(Math.abs(lower - 50), Math.abs(upper - 50)) / 5;
+    score += k * 10;
+    return score;
+  }
+  function qrGenerate(text) {
+    var bytes = Array.prototype.slice.call(new TextEncoder().encode(String(text)));
+    var version = 0, dataCw = null;
+    for (var v = 1; v <= 10; v++) {
+      var totalData = 0;
+      QR_M_BLOCKS[v][1].forEach(function (n) { totalData += n; });
+      var lenBits = v < 10 ? 8 : 16;
+      if (4 + lenBits + bytes.length * 8 <= totalData * 8) { version = v; dataCw = qrDataCodewords(bytes, v); break; }
+    }
+    if (!version) throw new Error("Nội dung quá dài cho mã QR (tối đa version 10-M)");
+    var codewords = qrInterleave(dataCw, version);
+    var best = null, bestMask = 0, bestScore = Infinity;
+    for (var mask = 0; mask < 8; mask++) {
+      var matrix = qrBuildMatrix(version, codewords, mask);
+      var pen = qrPenalty(matrix);
+      if (pen < bestScore) { bestScore = pen; best = matrix; bestMask = mask; }
+    }
+    return { version: version, size: version * 4 + 17, mask: bestMask, modules: best };
+  }
+  /* === 2FA-CORE-END === */
+
+  /* ---------- Cổng 2FA + thẻ bảo mật (giao diện) ---------- */
+  var gatePassword = null;   // mật khẩu vừa đăng nhập (chỉ trong bộ nhớ trang), cần để mở khoá 2FA
+  var gateCtx = null;        // {sec, secretBytes} trong lúc đứng ở cổng
+  var gateAttempts = 0;
+  var loginLoggedFor = null; // uid đã ghi activity "đăng nhập thành công" trong phiên này
+  var tfSetup = null;        // dữ liệu tạm của trình bật 2FA {secretB32, secretBytes, codes, hashes}
+
+  function isDirectorAccount() {
+    if (!state.user || !state.user.email) return false;
+    return String(state.user.email).trim().toLowerCase() === String(DIRECTOR_EMAIL || "").trim().toLowerCase();
+  }
+  function clearGateState() {
+    gatePassword = null;
+    gateCtx = null;
+    gateAttempts = 0;
+    loginLoggedFor = null;
+    tfSetup = null;
+  }
+  function loadSecurityDoc() {
+    if (!db) return Promise.resolve({});
+    return db.collection("settings").doc("security").get().then(function (snap) {
+      return snap.exists ? snap.data() : {};
+    });
+  }
+
+  /* Thiết bị tin cậy: localStorage giữ mốc hết hạn 7 ngày + dấu thiết bị +
+     salt của bản mã hoá tại thời điểm ghi nhớ (đổi/đặt lại 2FA là salt đổi -> phải qua cổng lại) */
+  var TRUST_KEY = "cty_trustedDeviceV1";
+  var DEVICE_KEY = "cty_deviceIdV1";
+  function deviceId() {
+    try {
+      var v = localStorage.getItem(DEVICE_KEY);
+      if (!v) {
+        v = "dev-" + Date.now().toString(36) + "-" + Math.floor(Math.random() * 1e9).toString(36);
+        localStorage.setItem(DEVICE_KEY, v);
+      }
+      return v;
+    } catch (e) { console.error("deviceId lỗi:", e); return "dev-unknown"; }
+  }
+  function isTrustedDevice(email, sec) {
+    try {
+      var raw = localStorage.getItem(TRUST_KEY);
+      if (!raw) return false;
+      var rec = JSON.parse(raw);
+      if (!rec || rec.email !== email) return false;
+      if (!rec.exp || rec.exp <= Date.now()) return false;
+      if (!sec || !sec.directorTotpEnc) return false;
+      return rec.salt === (sec.directorTotpEnc.salt || "");
+    } catch (e) { console.error("isTrustedDevice lỗi:", e); return false; }
+  }
+  function grantTrust(email, sec) {
+    try {
+      localStorage.setItem(TRUST_KEY, JSON.stringify({
+        email: email,
+        exp: Date.now() + 7 * 24 * 3600 * 1000,
+        device: deviceId(),
+        salt: (sec && sec.directorTotpEnc && sec.directorTotpEnc.salt) || ""
+      }));
+    } catch (e) { console.error("grantTrust lỗi:", e); }
+  }
+
+  /* Điểm vào sau khi hồ sơ đã nạp: nhân viên vào thẳng như cũ;
+     Giám đốc phải qua cổng 2FA nếu đã bật và thiết bị chưa được ghi nhớ */
+  function enterAppAfterSecurity(user) {
+    if (!isDirectorAccount()) {
+      gatePassword = null;
+      enterApp();
+      switchTab("overview");
+      return;
+    }
+    loadSecurityDoc().then(function (sec) {
+      state.security = sec || {};
+      var enabled = !!(state.security && state.security.directorTotpEnc);
+      if (!enabled) { finishEnter(); return; }
+      var email = String(user.email || "").trim().toLowerCase();
+      if (isTrustedDevice(email, state.security)) { finishEnter(); return; }
+      showGate(state.security, null);
+    }).catch(function (e) {
+      console.error("Không đọc được cấu hình bảo mật settings/security:", e);
+      showGate(null, e);
+    });
+  }
+  function finishEnter() {
+    enterApp();
+    switchTab("overview");
+    if (isDirectorAccount() && state.user && loginLoggedFor !== state.user.uid) {
+      loginLoggedFor = state.user.uid;
+      logActivity("đã đăng nhập thành công", "security");
+    }
+  }
+
+  function showGate(sec, loadError) {
+    gateCtx = { sec: sec || {}, secretBytes: null };
+    gateAttempts = 0;
+    $("loginView").classList.add("hidden");
+    $("noProfileView").classList.add("hidden");
+    $("appView").classList.add("hidden");
+    $("gateView").classList.remove("hidden");
+    $("gateCode").value = "";
+    $("gatePassword").value = "";
+    $("gateRemember").checked = false;
+    $("gateHint").classList.add("hidden");
+    var errBox = $("gateError");
+    errBox.classList.add("hidden");
+    /* Phiên được khôi phục tự động (không qua ô đăng nhập) sẽ không có mật khẩu
+       trong bộ nhớ -> hiện ô nhập lại mật khẩu để mở khoá bí mật */
+    $("gatePasswordWrap").classList.toggle("hidden", !!gatePassword);
+    var broken = !!loadError;
+    $("gateCode").disabled = broken;
+    $("gateBtn").disabled = broken;
+    $("gateRetry").classList.toggle("hidden", !broken);
+    if (broken) {
+      errBox.textContent = "Không đọc được cấu hình bảo mật từ máy chủ. Kiểm tra mạng rồi tải lại trang để thử lại.";
+      errBox.classList.remove("hidden");
+    }
+    if (!broken) setTimeout(function () { $("gateCode").focus(); }, 60);
+  }
+
+  function gateFail(msg) {
+    gateAttempts++;
+    var errBox = $("gateError");
+    errBox.textContent = msg;
+    errBox.classList.remove("hidden");
+    var hint = $("gateHint");
+    if (gateAttempts >= 3) {
+      hint.textContent = "Bạn đã nhập sai " + gateAttempts + " lần. Hãy kiểm tra đồng hồ trên điện thoại có khớp giờ hệ thống không (mã đổi mỗi 30 giây), hoặc dùng một mã khôi phục chưa dùng.";
+      hint.classList.remove("hidden");
+    }
+    $("gateCode").select();
+  }
+
+  function onGateSubmit(ev) {
+    ev.preventDefault();
+    if (!gateCtx || !gateCtx.sec) return;
+    var sec = gateCtx.sec;
+    var code = $("gateCode").value.trim();
+    var errBox = $("gateError");
+    errBox.classList.add("hidden");
+    if (!code) { gateFail("Hãy nhập mã xác minh."); return; }
+    var pw = gatePassword || $("gatePassword").value;
+    if (!pw) { gateFail("Hãy nhập mật khẩu của bạn để mở khoá bảo mật."); return; }
+    var btn = $("gateBtn");
+    btn.disabled = true;
+    btn.textContent = "Đang xác minh...";
+
+    function tryRecovery() {
+      return hashRecovery(code).then(function (h) {
+        var hashes = sec.recoveryHashes || [];
+        if (hashes.indexOf(h) === -1) return null;
+        return h;
+      });
+    }
+    function succeed(via, usedHash) {
+      if ($("gateRemember").checked && state.user) {
+        grantTrust(String(state.user.email || "").trim().toLowerCase(), sec);
+      }
+      var jobs = [];
+      if (via === "recovery" && usedHash) {
+        jobs.push(
+          db.collection("settings").doc("security").update({
+            recoveryHashes: firebase.firestore.FieldValue.arrayRemove(usedHash),
+            updatedAt: serverTimestamp()
+          }).catch(function (e) { console.error("Xoá mã khôi phục đã dùng thất bại:", e); })
+        );
+        if (state.security && state.security.recoveryHashes) {
+          state.security.recoveryHashes = state.security.recoveryHashes.filter(function (x) { return x !== usedHash; });
+        }
+      }
+      Promise.all(jobs).then(function () {
+        if (via === "recovery") logActivity("đã đăng nhập bằng mã khôi phục", "security");
+        else logActivity("đã qua cổng xác minh 2 lớp (2FA)", "security");
+        btn.disabled = false;
+        btn.textContent = "Xác minh";
+        gatePassword = null;
+        gateCtx = null;
+        finishEnter();
+      });
+    }
+    function fail(msg) {
+      btn.disabled = false;
+      btn.textContent = "Xác minh";
+      gateFail(msg);
+    }
+
+    var secretReady;
+    if (gateCtx.secretBytes) {
+      secretReady = Promise.resolve(gateCtx.secretBytes);
+    } else {
+      secretReady = tfaDecryptSecret(pw, sec.directorTotpEnc).then(function (secretText) {
+        var bytes = base32Decode(secretText);
+        gateCtx.secretBytes = bytes;
+        return bytes;
+      }).catch(function (e) {
+        console.error("Mở khoá bí mật 2FA thất bại (sai mật khẩu hoặc dữ liệu đã đổi):", e);
+        return null;
+      });
+    }
+    secretReady.then(function (secretBytes) {
+      var isSix = /^\d{6}$/.test(code);
+      var totpJob = (secretBytes && isSix) ? totpVerify(secretBytes, code) : Promise.resolve(false);
+      return totpJob.then(function (ok) {
+        if (ok) { succeed("totp", null); return; }
+        return tryRecovery().then(function (h) {
+          if (h) { succeed("recovery", h); return; }
+          if (isSix && !secretBytes) {
+            fail("Không mở được khoá bảo mật bằng mật khẩu này. Nếu bạn vừa đổi mật khẩu, hãy dùng mã khôi phục để qua cổng rồi tắt và bật lại 2FA trong Cài đặt.");
+          } else {
+            fail("Mã không đúng. Kiểm tra lại mã trong ứng dụng xác thực, hoặc dùng một mã khôi phục chưa dùng.");
+          }
+        });
+      });
+    }).catch(function (e) {
+      console.error("Xác minh cổng 2FA thất bại:", e);
+      fail("Xác minh thất bại. Vui lòng thử lại.");
+    });
+  }
+
+  /* ---------- Thẻ "Bảo mật tài khoản Giám đốc" trong Cài đặt ---------- */
+  function renderSecurityCard() {
+    var card = $("securityCard");
+    if (!card) return;
+    if (!isDirectorAccount()) { card.classList.add("hidden"); return; }
+    card.classList.remove("hidden");
+    var sec = state.security || {};
+    var enabled = !!sec.directorTotpEnc;
+    $("secStatus").textContent = enabled ? "Đã bật — xác minh 2 lớp đang hoạt động" : "Chưa bật";
+    var rec = $("secRecoveryInfo");
+    if (enabled) {
+      var n = (sec.recoveryHashes || []).length;
+      rec.textContent = "Mã khôi phục chưa dùng: " + n + "/10. Khi hết mã khôi phục, hãy tắt rồi bật lại 2FA để cấp bộ mã mới.";
+      rec.classList.remove("hidden");
+    } else {
+      rec.classList.add("hidden");
+    }
+    $("secEnableBtn").classList.toggle("hidden", enabled);
+    $("secDisableWrap").classList.toggle("hidden", !enabled);
+  }
+  function secCardNote(msg, isError) {
+    var okBox = $("secCardMsg"), errBox = $("secCardError");
+    okBox.classList.add("hidden");
+    errBox.classList.add("hidden");
+    if (!msg) return;
+    if (isError) { errBox.textContent = msg; errBox.classList.remove("hidden"); }
+    else { okBox.textContent = msg; okBox.classList.remove("hidden"); }
+  }
+
+  function onSecDisable() {
+    if (!isDirectorAccount() || !db) return;
+    secCardNote("");
+    var pw = $("secDisablePw").value;
+    var code = $("secDisableCode").value.trim();
+    if (!pw) { secCardNote("Hãy nhập mật khẩu hiện tại.", true); return; }
+    if (!code) { secCardNote("Hãy nhập mã xác thực.", true); return; }
+    var btn = $("secDisableBtn");
+    btn.disabled = true;
+    btn.textContent = "Đang kiểm tra...";
+    function done() { btn.disabled = false; btn.textContent = "Tắt xác minh 2 lớp"; }
+    var cred = firebase.auth.EmailAuthProvider.credential(state.user.email, pw);
+    state.user.reauthenticateWithCredential(cred).then(function () {
+      return loadSecurityDoc();
+    }).then(function (sec) {
+      if (!sec || !sec.directorTotpEnc) {
+        secCardNote("Xác minh 2 lớp chưa được bật.", true);
+        done();
+        return null;
+      }
+      var verify = tfaDecryptSecret(pw, sec.directorTotpEnc).then(function (secretText) {
+        return totpVerify(base32Decode(secretText), code);
+      }).catch(function (e) {
+        console.error("Tắt 2FA: mở khoá bí mật thất bại, thử bằng mã khôi phục:", e);
+        return false;
+      });
+      return verify.then(function (ok) {
+        if (ok) return true;
+        return hashRecovery(code).then(function (h) {
+          return (sec.recoveryHashes || []).indexOf(h) !== -1;
+        });
+      }).then(function (ok2) {
+        if (!ok2) {
+          secCardNote("Mật khẩu hoặc mã xác thực không đúng. Tắt 2FA bị huỷ.", true);
+          done();
+          return null;
+        }
+        var fv = firebase.firestore.FieldValue;
+        return db.collection("settings").doc("security").update({
+          directorTotpEnc: fv.delete(),
+          recoveryHashes: fv.delete(),
+          updatedAt: serverTimestamp()
+        }).then(function () {
+          state.security = {};
+          $("secDisablePw").value = "";
+          $("secDisableCode").value = "";
+          renderSecurityCard();
+          secCardNote("Đã tắt xác minh 2 lớp. Bí mật xác thực và mã khôi phục đã được xoá.");
+          logActivity("đã tắt xác minh 2 lớp (2FA)", "security");
+          done();
+        });
+      });
+    }).catch(function (e) {
+      console.error("Tắt 2FA thất bại:", e);
+      if (e && (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential")) {
+        secCardNote("Mật khẩu hiện tại không đúng.", true);
+      } else {
+        secCardNote("Tắt 2FA thất bại. Vui lòng thử lại.", true);
+      }
+      done();
+    });
+  }
+
+  /* ---------- Trình bật 2FA (modal 4 bước) ---------- */
+  function drawQr(canvas, text) {
+    var qr = qrGenerate(text);
+    var n = qr.size;
+    var scale = Math.max(2, Math.floor(canvas.width / (n + 8)));
+    var off = Math.floor((canvas.width - scale * n) / 2);
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#1A1D21";
+    for (var r = 0; r < n; r++) for (var c = 0; c < n; c++) {
+      if (qr.modules[r][c]) ctx.fillRect(off + c * scale, off + r * scale, scale, scale);
+    }
+  }
+  function tfGoStep(n) {
+    [1, 2, 3, 4].forEach(function (k) {
+      $("tfStep" + k).classList.toggle("hidden", k !== n);
+      var chip = document.querySelector('[data-tfdot="' + k + '"]');
+      if (chip) {
+        chip.classList.toggle("active", k === n);
+        chip.classList.toggle("done", k < n);
+      }
+    });
+  }
+  function tfError(step, msg) {
+    var box = $("tfError" + step);
+    if (!box) return;
+    if (msg) { box.textContent = msg; box.classList.remove("hidden"); }
+    else box.classList.add("hidden");
+  }
+  function openTwofaModal() {
+    if (!isDirectorAccount()) return;
+    if (!subtleCrypto) {
+      secCardNote("Trình duyệt không hỗ trợ WebCrypto (cần HTTPS). Hãy mở trang qua địa chỉ https rồi thử lại.", true);
+      console.error("openTwofaModal: crypto.subtle không khả dụng (thiếu secure context?)");
+      return;
+    }
+    tfSetup = null;
+    ["tfCurPw", "tfNewPw", "tfNewPw2", "tfCode"].forEach(function (id) { $(id).value = ""; });
+    [1, 2, 3, 4].forEach(function (k) { tfError(k, ""); });
+    $("tfSavedChk").checked = false;
+    $("tfFinish").disabled = true;
+    tfGoStep(1);
+    $("twofaModal").classList.remove("hidden");
+  }
+  function closeTwofaModal() {
+    $("twofaModal").classList.add("hidden");
+    tfSetup = null; /* xoá bí mật tạm khỏi bộ nhớ khi đóng trình */
+  }
+  function onTfStep1() {
+    tfError(1, "");
+    var cur = $("tfCurPw").value;
+    var np = $("tfNewPw").value;
+    var np2 = $("tfNewPw2").value;
+    if (!cur) { tfError(1, "Hãy nhập mật khẩu hiện tại."); return; }
+    if (!np || np.length < 10) { tfError(1, "Mật khẩu mới phải có ít nhất 10 ký tự."); return; }
+    if (!/[A-Za-z]/.test(np) || !/[0-9]/.test(np)) { tfError(1, "Mật khẩu mới phải gồm cả chữ và số."); return; }
+    if (np !== np2) { tfError(1, "Hai ô mật khẩu mới chưa khớp nhau."); return; }
+    var btn = $("tfNext1");
+    btn.disabled = true;
+    btn.textContent = "Đang đổi mật khẩu...";
+    var cred = firebase.auth.EmailAuthProvider.credential(state.user.email, cur);
+    state.user.reauthenticateWithCredential(cred).then(function () {
+      return state.user.updatePassword(np);
+    }).then(function () {
+      gatePassword = np; /* khoá mã hoá 2FA dùng mật khẩu MỚI vừa đặt */
+      var secretBytes = subtleCrypto.getRandomValues(new Uint8Array(20));
+      tfSetup = {
+        secretB32: base32Encode(secretBytes),
+        secretBytes: secretBytes,
+        codes: null,
+        hashes: null
+      };
+      $("tfSecretText").textContent = tfSetup.secretB32.replace(/(.{4})/g, "$1 ").trim();
+      try {
+        drawQr($("tfQr"), otpauthUrl(tfSetup.secretB32, state.user.email));
+      } catch (e) {
+        console.error("Vẽ mã QR 2FA thất bại:", e);
+        tfError(2, "Không vẽ được mã QR — hãy nhập tay mã bí mật bên dưới vào ứng dụng xác thực.");
+      }
+      btn.disabled = false;
+      btn.textContent = "Đổi mật khẩu & tiếp tục";
+      tfGoStep(2);
+    }).catch(function (e) {
+      console.error("Bật 2FA bước 1 (đổi mật khẩu) thất bại:", e);
+      btn.disabled = false;
+      btn.textContent = "Đổi mật khẩu & tiếp tục";
+      if (e && (e.code === "auth/wrong-password" || e.code === "auth/invalid-credential")) {
+        tfError(1, "Mật khẩu hiện tại không đúng.");
+      } else if (e && e.code === "auth/weak-password") {
+        tfError(1, "Mật khẩu mới quá yếu theo chính sách của Firebase. Hãy chọn mật khẩu dài và phức tạp hơn.");
+      } else {
+        tfError(1, "Đổi mật khẩu thất bại. Vui lòng thử lại.");
+      }
+    });
+  }
+  function onTfStep3() {
+    tfError(3, "");
+    if (!tfSetup) { tfError(3, "Phiên thiết lập đã hết. Hãy đóng và mở lại trình bật 2FA."); return; }
+    var code = $("tfCode").value.trim();
+    var btn = $("tfNext3");
+    btn.disabled = true;
+    btn.textContent = "Đang xác nhận...";
+    totpVerify(tfSetup.secretBytes, code).then(function (ok) {
+      btn.disabled = false;
+      btn.textContent = "Xác nhận mã";
+      if (!ok) {
+        tfError(3, "Mã chưa đúng. Kiểm tra lại mã 6 số trong ứng dụng (mã đổi mỗi 30 giây) rồi thử lại.");
+        return;
+      }
+      var codes = [];
+      for (var i = 0; i < 10; i++) codes.push(genRecoveryCode());
+      tfSetup.codes = codes;
+      $("tfCodes").innerHTML = codes.map(function (cd) {
+        return '<div class="tf-code mono">' + esc(cd) + "</div>";
+      }).join("");
+      $("tfSavedChk").checked = false;
+      $("tfFinish").disabled = true;
+      tfGoStep(4);
+    }).catch(function (e) {
+      console.error("Bật 2FA bước 3 (xác nhận mã) thất bại:", e);
+      btn.disabled = false;
+      btn.textContent = "Xác nhận mã";
+      tfError(3, "Xác nhận thất bại. Vui lòng thử lại.");
+    });
+  }
+  function onTfFinish() {
+    tfError(4, "");
+    if (!tfSetup || !tfSetup.codes) { tfError(4, "Phiên thiết lập đã hết. Hãy đóng và mở lại trình bật 2FA."); return; }
+    if (!$("tfSavedChk").checked) { tfError(4, "Hãy tích xác nhận đã lưu mã khôi phục trước khi hoàn tất."); return; }
+    var btn = $("tfFinish");
+    btn.disabled = true;
+    btn.textContent = "Đang mã hoá & lưu...";
+    var hashesJob = Promise.all(tfSetup.codes.map(function (cd) { return hashRecovery(cd); }));
+    hashesJob.then(function (hashes) {
+      tfSetup.hashes = hashes;
+      return tfaEncryptSecret(gatePassword, tfSetup.secretB32);
+    }).then(function (enc) {
+      return db.collection("settings").doc("security").set({
+        directorTotpEnc: enc,
+        recoveryHashes: tfSetup.hashes,
+        updatedAt: serverTimestamp()
+      }, { merge: true }).then(function () { return enc; });
+    }).then(function (enc) {
+      state.security = {
+        directorTotpEnc: enc,
+        recoveryHashes: tfSetup.hashes
+      };
+      logActivity("đã bật xác minh 2 lớp (2FA)", "security");
+      closeTwofaModal();
+      renderSecurityCard();
+      secCardNote("Đã bật xác minh 2 lớp. Từ lần đăng nhập tới, Giám đốc sẽ phải nhập thêm mã xác thực (trên thiết bị này có thể chọn ghi nhớ 7 ngày ở cổng xác minh).");
+    }).catch(function (e) {
+      console.error("Bật 2FA bước 4 (lưu settings/security) thất bại:", e);
+      btn.disabled = false;
+      btn.textContent = "Hoàn tất bật 2FA";
+      tfError(4, "Lưu cấu hình bảo mật thất bại. Kiểm tra mạng rồi thử lại — mã khôi phục ở trên vẫn còn hiệu lực cho lần thử này.");
+    });
+  }
+
   /* ---------- Ủy quyền sự kiện bấm (toàn cục) ---------- */
   function toggleCollapse(map, id) { map[id] = !map[id]; }
 
@@ -2164,6 +3076,15 @@
     });
     msgInput.addEventListener("keydown", onMessageKeydown);
     msgInput.addEventListener("blur", function () { setTimeout(closeMentionBox, 150); });
+    /* Ô soạn tin tự giãn chiều cao theo nội dung (tối thiểu theo CSS, tối đa 120px);
+       gửi xong thì thu về chiều cao mặc định. */
+    msgInput.addEventListener("input", function () {
+      msgInput.style.height = "auto";
+      msgInput.style.height = Math.min(msgInput.scrollHeight, 120) + "px";
+    });
+    $("messageForm").addEventListener("submit", function () {
+      setTimeout(function () { msgInput.style.height = ""; }, 0);
+    });
     $("mentionBox").addEventListener("mousedown", function (ev) {
       var it = ev.target && typeof ev.target.closest === "function"
         ? ev.target.closest("[data-mention-idx]") : null;
@@ -2184,6 +3105,23 @@
     });
     $("intervalSave").addEventListener("click", onSaveInterval);
     $("passwordSave").addEventListener("click", onChangePassword);
+    /* Bảo mật 2FA của Giám đốc: cổng xác minh + thẻ bảo mật + trình bật 2FA */
+    $("gateForm").addEventListener("submit", onGateSubmit);
+    $("gateLogout").addEventListener("click", doLogout);
+    $("gateRetry").addEventListener("click", function () { location.reload(); });
+    $("secEnableBtn").addEventListener("click", openTwofaModal);
+    $("secDisableBtn").addEventListener("click", onSecDisable);
+    $("tfClose").addEventListener("click", closeTwofaModal);
+    $("twofaModal").addEventListener("click", function (ev) {
+      if (ev.target === $("twofaModal")) closeTwofaModal();
+    });
+    $("tfNext1").addEventListener("click", onTfStep1);
+    $("tfNext2").addEventListener("click", function () { tfError(3, ""); tfGoStep(3); setTimeout(function () { $("tfCode").focus(); }, 60); });
+    $("tfNext3").addEventListener("click", onTfStep3);
+    $("tfSavedChk").addEventListener("change", function () {
+      $("tfFinish").disabled = !$("tfSavedChk").checked;
+    });
+    $("tfFinish").addEventListener("click", onTfFinish);
     $("bellBtn").addEventListener("click", toggleBell);
     $("profileClose").addEventListener("click", closeProfile);
     $("taskClose").addEventListener("click", closeTask);
@@ -2238,8 +3176,7 @@
       state.user = user;
       loadMyProfile(user).then(function (ok) {
         if (ok) {
-          enterApp();
-          switchTab("overview");
+          enterAppAfterSecurity(user);
         } else {
           showNoProfile(user.email);
         }
