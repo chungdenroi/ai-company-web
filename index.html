@@ -2,7 +2,7 @@
 <html lang="vi">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Công ty Enteesee — Phòng Họp &amp; Điều Hành</title>
 <style>
   :root{
@@ -357,6 +357,174 @@
   .sub-list{display:flex; flex-wrap:wrap; gap:7px}
   .sub-item{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:#fbfbfe;
     border-radius:999px; padding:4px 11px 4px 5px; font-weight:600}
+
+  /* Chip trạng thái của chính mình trên header */
+  .self-status{display:inline-flex; align-items:center; gap:6px; background:rgba(255,255,255,.16);
+    border:1px solid rgba(255,255,255,.38); color:#fff; border-radius:999px; padding:4px 11px;
+    font-size:.78rem; font-weight:600; white-space:nowrap; flex:0 1 auto; min-width:0;
+    overflow:hidden; text-overflow:ellipsis}
+  .self-status .dot{box-shadow:none; width:9px; height:9px}
+  .self-avatar{display:inline-flex; flex:0 0 auto}
+  .self-avatar .avatar{box-shadow:inset 0 0 0 2px rgba(255,255,255,.5)}
+
+  /* Dải hiện diện ngang (Tổng quan) */
+  .presence-strip{display:flex; gap:10px; overflow-x:auto; padding:4px 2px 8px;
+    -webkit-overflow-scrolling:touch; scrollbar-width:thin}
+  .pstrip-item{flex:0 0 auto; width:118px; text-align:center; padding:10px 8px 9px;
+    border:1px solid #eef0f7; border-radius:12px; background:#fbfbfe}
+  .pstrip-item.clickable:hover{border-color:var(--indigo-mid)}
+  .pstrip-av{position:relative; width:44px; margin:0 auto 6px}
+  .pstrip-av .avatar{margin:0 auto}
+  .pstrip-dot{position:absolute; right:-3px; bottom:-2px; box-shadow:0 0 0 2px #fff}
+  .pstrip-name{font-weight:700; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .pstrip-state{font-size:.78rem; font-weight:600; color:var(--muted); margin-top:1px;
+    white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .pstrip-state.on{color:var(--ok)}
+  .pstrip-sub{font-size:.72rem; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+  .pstrip-work{font-size:.74rem; color:var(--muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+
+  /* Chấm chỉ thị cột của bảng việc (chỉ hiện trên mobile) */
+  .board-dots{display:none}
+  .bdot{width:8px; height:8px; border-radius:999px; border:none; background:#c9cede; padding:0; transition:all .2s}
+  .bdot.active{background:var(--indigo); width:22px}
+
+  /* ================= MOBILE (<=760px): thang gọn kiểu app di động ================= */
+  @media (max-width:760px){
+    body{font-size:15px; line-height:1.45}
+    main.panes{padding:12px 10px calc(88px + env(safe-area-inset-bottom))}
+    .tabpane h2.pane-title{font-size:1.02rem; margin:2px 0 10px}
+    .section-gap{margin-top:16px}
+    .card{padding:12px; border-radius:12px}
+    label{font-size:.86rem; margin:10px 0 5px}
+    input,select,textarea{padding:9px 10px; border-radius:8px}
+    .btn{min-height:42px; padding:8px 14px}
+    .btn.small{min-height:36px; padding:4px 10px; font-size:.85rem}
+    .btn.ghost{min-height:38px; padding:6px 12px}
+    .chip,.kind,.prio,.status-chip,.due-chip{font-size:.68rem; padding:2px 7px}
+    .avatar{width:38px; height:38px; font-size:.95rem}
+    .avatar.sm{width:32px; height:32px; font-size:.85rem}
+    .avatar.lg{width:54px; height:54px; font-size:1.3rem}
+    .dot{width:10px; height:10px}
+    .error,.success{font-size:.88rem; padding:8px 10px}
+    .hint{font-size:.86rem}
+
+    /* Header mỏng */
+    header.topbar{padding:6px 10px; gap:6px}
+    header.topbar .brand{font-size:.95rem; gap:7px}
+    header.topbar .brand .brand-mark{width:26px; height:26px; border-radius:7px; font-size:.85rem}
+    header.topbar .userbox{gap:6px}
+    header.topbar .who{display:none}
+    header.topbar .btn.ghost{min-height:34px; padding:4px 9px; font-size:.8rem}
+    .bell-btn{width:36px; height:36px}
+    .bell-btn svg{width:19px; height:19px}
+    .bell-panel{top:44px; width:min(330px,92vw)}
+    .bell-item{padding:9px 12px}
+    .self-status{font-size:.66rem; padding:3px 7px; gap:5px}
+    .self-avatar .avatar{width:30px; height:30px; font-size:.8rem}
+
+    /* Thanh điều hướng DƯỚI cố định */
+    nav.tabs{position:fixed; top:auto; bottom:0; left:0; right:0; z-index:45;
+      padding:5px 3px calc(5px + env(safe-area-inset-bottom));
+      border-top:1px solid var(--border); border-bottom:none;
+      box-shadow:0 -3px 14px rgba(30,34,53,.10); overflow-x:visible; gap:0}
+    nav.tabs .tab{flex:1 1 0; min-height:46px; padding:5px 1px; font-size:.68rem; font-weight:600;
+      white-space:normal; text-align:center; line-height:1.2; border-radius:8px}
+    nav.tabs .tab .badge{position:absolute; top:1px; right:4px; margin:0;
+      min-width:17px; height:17px; font-size:.64rem; padding:0 4px}
+    .composer{bottom:calc(57px + env(safe-area-inset-bottom))}
+
+    /* Đăng nhập */
+    .login-card{padding:22px 18px}
+    .login-card h1{font-size:1.35rem}
+
+    /* Tổng quan */
+    .stat-grid{gap:8px; margin-bottom:14px}
+    .stat-card{padding:11px 13px; border-radius:12px}
+    .stat-card .stat-num{font-size:1.45rem}
+    .stat-card .stat-label{font-size:.82rem}
+    .emp-grid{gap:8px}
+    .emp-card{padding:10px 12px; border-radius:12px}
+    .emp-card .e-head{gap:9px}
+    .emp-card .e-name{font-size:.98rem}
+    .emp-card .e-title{font-size:.84rem}
+    .emp-card .e-chips{margin-top:7px; gap:5px}
+    .emp-card .e-work{margin-top:7px; padding:6px 9px; font-size:.87rem;
+      white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+    .emp-card .e-foot{margin-top:7px; font-size:.79rem; gap:4px 10px}
+    .approval-item{padding:10px 11px; gap:8px}
+    .presence-strip{gap:8px}
+    .pstrip-item{width:100px; padding:8px 6px 7px}
+    .pstrip-av{width:38px}
+    .pstrip-av .avatar{width:38px; height:38px; font-size:.9rem}
+    .pstrip-name{font-size:.84rem}
+    .pstrip-state{font-size:.72rem}
+    .activity-item{font-size:.88rem; padding:7px 2px}
+
+    /* Ghim */
+    .pin-banner{padding:10px 12px; gap:8px; margin-bottom:12px}
+    .pin-banner .pin-content{font-size:.92rem}
+
+    /* Sơ đồ tổ chức + treeview */
+    .org-node{width:152px; padding:9px 8px}
+    .org-node .o-name{font-size:.92rem}
+    .org-node .o-title{font-size:.78rem}
+    .org-node .o-chips{gap:4px; margin-top:5px}
+    .org-tree li{padding:18px 5px 0}
+    .org-tree ul{padding-top:18px}
+    .toggle-btn{width:26px; height:26px; margin-top:6px}
+    .tv-wrap{padding:8px 10px}
+    .tv-node{padding:7px 9px; gap:8px}
+    .tv-node .n-title{font-size:.82rem}
+    ul.tv{padding-left:14px}
+
+    /* Phòng họp */
+    .messages{gap:8px}
+    .msg{padding:10px; gap:8px; border-radius:12px}
+    .msg .sender{font-size:.94rem}
+    .msg .content{font-size:.95rem}
+    .att-img img{max-height:260px}
+    .att-file{padding:8px 10px; font-size:.9rem}
+    .composer select{flex-basis:102px}
+    .composer textarea{min-height:42px}
+    .attach-btn{width:42px; height:42px}
+    .composer .btn{min-height:42px; padding:8px 12px}
+
+    /* Công việc: vuốt ngang snap từng cột */
+    .board{display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:10px;
+      margin:0 -10px; padding:2px 10px 10px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
+    .board::-webkit-scrollbar{display:none}
+    .board-col{flex:0 0 85%; scroll-snap-align:start; padding:8px; border-radius:12px}
+    .board-col h3{font-size:.92rem; margin-bottom:8px}
+    .board-dots{display:flex; justify-content:center; gap:6px; margin-top:2px}
+    .task-card{padding:10px; margin-bottom:8px}
+    .task-card .t-title{font-size:.95rem}
+    .task-card .t-desc{font-size:.88rem}
+    .task-card .t-meta{font-size:.8rem}
+    .filter-bar{gap:6px; margin-bottom:10px}
+    .filter-btn{min-height:36px; padding:5px 13px; font-size:.88rem}
+
+    /* Nhân viên — quản trị */
+    .admin-item{padding:11px 12px; margin-bottom:10px}
+    .admin-item dl{font-size:.86rem; gap:3px 10px}
+
+    /* Cài đặt */
+    .interval-main{gap:10px}
+    .interval-main input{width:104px; font-size:1.45rem; padding:8px}
+    .interval-main .unit{font-size:1rem}
+    .interval-main .btn{min-height:48px; padding:8px 18px; font-size:.95rem}
+
+    /* Modal = bottom sheet */
+    .modal-card{max-height:92vh; padding:16px 14px calc(14px + env(safe-area-inset-bottom));
+      border-radius:16px 16px 0 0}
+    .modal-close{top:9px; right:9px; width:34px; height:34px}
+    .profile-head{gap:10px; padding-right:34px}
+    .profile-head .p-name{font-size:1.12rem}
+    .profile-card dl{font-size:.89rem; gap:5px 10px}
+    .profile-stats{gap:6px; margin-top:11px}
+    .profile-stats .ps{padding:7px 4px}
+    .profile-stats .ps b{font-size:1.05rem}
+    .profile-card h3{margin:14px 0 6px; font-size:.95rem}
+  }
 </style>
 </head>
 <body>
@@ -392,8 +560,9 @@
 <!-- Khung ứng dụng sau đăng nhập -->
 <div id="appView" class="hidden">
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">E</span> Công ty Enteesee</div>
+    <div class="brand"><span class="brand-mark">E</span><span class="brand-name">Công ty Enteesee</span></div>
     <div class="userbox">
+      <span id="selfStatus" class="self-status hidden"></span>
       <div class="bell-wrap">
         <button id="bellBtn" class="bell-btn" type="button" aria-label="Thông báo">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22c1.1 0 2-.9 2-2h-4c0 1.1.9 2 2 2zm6-6v-5c0-3.07-1.63-5.64-4.5-6.32V4c0-.83-.67-1.5-1.5-1.5S10.5 3.17 10.5 4v.68C7.64 5.36 6 7.92 6 11v5l-2 2v1h16v-1l-2-2z"/></svg>
@@ -404,6 +573,7 @@
           <div id="bellList"></div>
         </div>
       </div>
+      <span id="selfAvatar" class="self-avatar hidden"></span>
       <span class="who" id="currentUserLabel"></span>
       <button id="logoutBtn" class="btn ghost" type="button">Đăng xuất</button>
     </div>
@@ -438,7 +608,7 @@
       <div id="overviewGrid" class="emp-grid"></div>
 
       <h2 class="pane-title section-gap">Đang trực tuyến / hoạt động gần đây</h2>
-      <div class="card" style="padding:8px 18px"><div id="presenceList" class="presence-list"></div></div>
+      <div class="card" style="padding:10px 12px"><div id="presenceList" class="presence-strip"></div></div>
 
       <h2 class="pane-title section-gap">Nhật ký hoạt động công ty</h2>
       <div class="card" style="padding:8px 18px"><div id="activityList" class="activity-list"></div></div>
@@ -524,6 +694,7 @@
         <button class="filter-btn" data-filter="overdue" type="button">Quá hạn</button>
       </div>
       <div id="taskBoard" class="board"></div>
+      <div id="boardDots" class="board-dots"></div>
     </section>
 
     <!-- Tab Nhân viên -->
