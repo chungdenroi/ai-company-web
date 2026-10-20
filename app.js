@@ -102,10 +102,36 @@
     var s = String(name || "?").trim();
     return s ? s.charAt(0).toUpperCase() : "?";
   }
+  /* Màu avatar pastel theo màu định danh của nhân viên (phong cách Mẫu C):
+     nền pastel nhạt + chữ đậm cùng tông, ổn định theo mã màu đã lưu. */
+  var PASTEL_PAIRS = {
+    "#4f46e5": ["#E0E7FF", "#3538CD"],
+    "#7c3aed": ["#E9D7FE", "#6941C6"],
+    "#0ea5e9": ["#D1E9FF", "#175CD3"],
+    "#059669": ["#D1FADF", "#027A48"],
+    "#d97706": ["#FFEAD5", "#7A2E0E"],
+    "#db2777": ["#FEE4E2", "#912018"],
+    "#0891b2": ["#D3F2FB", "#155E75"],
+    "#65a30d": ["#E6F4D7", "#3F6212"],
+    "#9333ea": ["#E9D7FE", "#6941C6"],
+    "#ea580c": ["#FFEAD5", "#9A3412"]
+  };
+  function pastelFor(color) {
+    var c = String(color || "").toLowerCase();
+    if (PASTEL_PAIRS[c]) return PASTEL_PAIRS[c];
+    var m = /^#?([0-9a-f]{6})$/.exec(c);
+    if (!m) return ["#E4E7EC", "#344054"];
+    var n = parseInt(m[1], 16), r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+    function mix(v, t, f) { return Math.round(v + (t - v) * f); }
+    function hx(v) { return ("0" + v.toString(16)).slice(-2); }
+    return ["#" + hx(mix(r, 255, 0.84)) + hx(mix(g, 255, 0.84)) + hx(mix(b, 255, 0.84)),
+            "#" + hx(mix(r, 0, 0.28)) + hx(mix(g, 0, 0.28)) + hx(mix(b, 0, 0.28))];
+  }
   function avatarHtml(e, sizeCls) {
     var color = (e && e.color) || "#4f46e5";
     var name = e ? (e.name || "") : "?";
-    return '<span class="avatar ' + (sizeCls || "") + '" style="background:' + esc(color) + '">' + esc(initial(name)) + '</span>';
+    var pair = pastelFor(color);
+    return '<span class="avatar ' + (sizeCls || "") + '" style="background:' + pair[0] + ";color:" + pair[1] + '">' + esc(initial(name)) + '</span>';
   }
 
   /* ---------- Nhân viên: tra cứu + trạng thái kiểm tra ---------- */
