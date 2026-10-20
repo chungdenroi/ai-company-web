@@ -37,6 +37,9 @@
     fileCache: {},         // fileId -> Promise<{b64, type, name}>
     profileId: null,
     taskModalId: null,
+    mentionUI: null,       // {start, items, active} của hộp gợi ý @tag trong ô soạn tin
+    highlightMsgId: null,  // id tin đang được làm nổi bật sau khi bấm từ chuông thông báo
+    highlightTimer: null,
     unsub: []
   };
 
@@ -216,6 +219,20 @@
     var count = unreadCount();
     badge.textContent = String(count);
     badge.classList.toggle("hidden", count === 0);
+  }
+  /* Tin CHƯA ĐỌC có nhắc tên CHÍNH MÌNH: tập con của tin chưa đọc (cùng mốc đã đọc
+     với unreadCount, loại tin của chính mình) — hiển thị riêng trong chuông nhưng
+     KHÔNG cộng thêm vào tổng, tránh đếm trùng một tin hai lần. */
+  function mentionUnreadMessages() {
+    if (!state.me || state.currentTab === "room") return [];
+    var last = getLastReadAt();
+    return state.messages.filter(function (m) {
+      if (m.senderId === state.me.id) return false;
+      if (!m.mentions || m.mentions.indexOf(state.me.id) < 0) return false;
+      var t = tsMillis(m.createdAt);
+      if (t === null) t = Date.now();
+      return t > last;
+    });
   }
   function markRoomRead() {
     var max = getLastReadAt();
@@ -571,6 +588,8 @@
     if (name === "room") {
       markRoomRead();
       scrollMessagesBottom();
+    } else {
+      closeMentionBox();
     }
   }
 
@@ -578,6 +597,7 @@
   function canApprove() { return canManage(); }
   function bellData() {
     var unread = unreadCount();
+    var mentions = mentionUnreadMessages();
     var mine = [];
     var review = [];
     if (state.me) {
@@ -588,7 +608,11 @@
         review = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
       }
     }
-    return { unread: unread, mine: mine, review: review, total: unread + mine.length + review.length };
+    /* Tổng mục chưa xử lý = tin chưa đọc (ĐÃ gồm các tin nhắc tên mình — chúng là
+       tập con của tin chưa đọc nên không cộng thêm lần nữa) + việc chờ mình nhận
+       + việc chờ duyệt. Lấy max(unread, mentions) hay cộng mentions vào unread
+       đều sai: một là thiếu, hai là đếm trùng. */
+    return { unread: unread, mentions: mentions, mine: mine, review: review, total: unread + mine.length + review.length };
   }
   function renderBell() {
     var badge = $("bellBadge");
@@ -598,13 +622,25 @@
     badge.classList.toggle("hidden", b.total === 0);
     if (!$("bellPanel").classList.contains("hidden")) renderBellList(b);
   }
+  function snippetOf(text) {
+    var s = String(text || "").replace(/\s+/g, " ").trim();
+    return s.length > 64 ? s.slice(0, 64) + "…" : s;
+  }
   function renderBellList(b) {
     var box = $("bellList");
     if (!box) return;
     var html = "";
-    if (b.unread > 0) {
+    /* Lượt nhắc tên mình lên đầu danh sách — bấm vào nhảy thẳng tới tin đó. */
+    b.mentions.slice(0, 5).forEach(function (m) {
+      html += '<div class="bell-item" data-goto-msg="' + esc(m.id) + '"><span class="dot" style="margin-top:6px;background:#0a7bef"></span>' +
+        '<div class="b-text"><b>' + esc(m.senderName || "") + '</b> nhắc đến bạn trong phòng họp' +
+        '<div class="b-sub">' + esc(snippetOf(m.content)) + "</div></div></div>";
+    });
+    /* Phần tin chưa đọc còn lại ngoài các lượt nhắc (tránh lặp lại chính chúng). */
+    var restUnread = b.unread - b.mentions.length;
+    if (restUnread > 0) {
       html += '<div class="bell-item" data-goto="room"><span class="dot late" style="margin-top:6px"></span>' +
-        '<div class="b-text"><b>' + b.unread + ' tin phòng họp chưa đọc</b>' +
+        '<div class="b-text"><b>' + (b.mentions.length ? "Còn " : "") + restUnread + ' tin phòng họp chưa đọc</b>' +
         '<div class="b-sub">Bấm để vào phòng họp xem và nhận việc</div></div></div>';
     }
     b.mine.forEach(function (t) {
@@ -629,6 +665,25 @@
     var panel = $("bellPanel");
     if (panel) panel.classList.add("hidden");
   }
+  /* Bấm một lượt nhắc trong chuông: vào phòng họp và làm nổi bật đúng tin đó
+     trong ~2,8 giây (class msg-highlight), cuộn tin vào giữa màn hình. */
+  function jumpToMessage(id) {
+    if (!id) return;
+    if (state.highlightTimer) { clearTimeout(state.highlightTimer); state.highlightTimer = null; }
+    state.highlightMsgId = id;
+    switchTab("room");
+    renderMessages();
+    requestAnimationFrame(function () {
+      var el = document.querySelector('.msg[data-msg-id="' + id + '"]');
+      if (el && el.scrollIntoView) el.scrollIntoView({ block: "center", behavior: "smooth" });
+    });
+    state.highlightTimer = setTimeout(function () {
+      state.highlightMsgId = null;
+      state.highlightTimer = null;
+      var el = document.querySelector(".msg.msg-highlight");
+      if (el) el.classList.remove("msg-highlight");
+    }, 2800);
+  }
 
   /* ---------- Ghim thông báo ---------- */
   function latestPinned() {
@@ -643,7 +698,7 @@
     var html = "";
     if (m) {
       html = '<div class="pin-banner"><span class="pin-tag">THÔNG BÁO GHIM</span>' +
-        '<div class="pin-content">' + esc(m.content || "") +
+        '<div class="pin-content">' + formatContentHtml(m.content || "", m.mentions, state.employees, state.me ? state.me.id : null) +
         '<div class="pin-meta">' + esc(m.senderName || "") +
         (m.senderTitle ? " — " + esc(m.senderTitle) : "") + " · " + esc(fmtTime(m.createdAt)) + '</div></div>' +
         (canManage() ? '<button class="btn ghost small" type="button" data-unpin="' + esc(m.id) + '">Bỏ ghim</button>' : "") +
@@ -657,6 +712,99 @@
     if (!db) return;
     db.collection("messages").doc(msgId).update({ pinned: val })
       .catch(function (e) { console.warn("pin message:", e); });
+  }
+
+  /* ---------- Nhắc tên (@tag) trong phòng họp ----------
+     Luật nhận diện (áp dụng giống nhau cho lúc gửi, lúc hiển thị và hộp gợi ý):
+     - "@" chỉ mở một lượt nhắc khi nó đứng ở đầu nội dung hoặc ngay sau khoảng trắng
+       (nên "abc@hung" kiểu địa chỉ email KHÔNG bao giờ thành lượt nhắc).
+     - Tên được so khớp TRỰC TIẾP bằng chuỗi (không dựng RegExp từ tên nhân viên,
+       nên không có bề mặt tiêm mẫu tìm kiếm), không phân biệt hoa/thường và gấp dấu
+       tiếng Việt ("@hung", "@HÙNG", "@Hùng" đều khớp nhân viên "Hùng").
+     - Ngay sau tên phải là ký tự không thuộc từ (khoảng trắng, dấu câu, hết câu...)
+       để "@HùngTuấn" không bị tính nhầm là nhắc "Hùng". */
+  function mentionFold(s) {
+    return String(s || "").normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+      .replace(/\u0111/g, "d").replace(/\u0110/g, "d").toLowerCase();
+  }
+  /* Gấp dấu từng ký tự, kèm bản đồ vị trí: map[i] = vị trí kết thúc (exclusive)
+     trong chuỗi gốc tương ứng với ký tự gấp thứ i — để cắt lại đúng đoạn gốc. */
+  function foldWithMap(s) {
+    var folded = "", map = [];
+    for (var i = 0; i < s.length; i++) {
+      var f = mentionFold(s.charAt(i));
+      for (var j = 0; j < f.length; j++) { folded += f.charAt(j); map.push(i + 1); }
+    }
+    return { folded: folded, map: map };
+  }
+  function isWordChar(ch) {
+    if (!ch) return false;
+    if (ch === "_") return true;
+    if (ch >= "0" && ch <= "9") return true;
+    return ch.toLowerCase() !== ch.toUpperCase();
+  }
+  function matchMentionAt(text, at, list) {
+    var win = foldWithMap(text.slice(at + 1, at + 1 + 64));
+    for (var i = 0; i < list.length; i++) {
+      var fn = list[i].folded;
+      if (win.folded.length < fn.length) continue;
+      if (win.folded.slice(0, fn.length) !== fn) continue;
+      var endOrig = at + 1 + win.map[fn.length - 1];
+      if (isWordChar(text.charAt(endOrig))) continue;
+      return { id: list[i].id, name: text.slice(at + 1, endOrig), start: at, end: endOrig };
+    }
+    return null;
+  }
+  /* Trả về mọi lượt nhắc trong nội dung: [{id, name (như đã gõ), start, end}] */
+  function findMentions(content, employees) {
+    var text = String(content || "");
+    var list = (employees || []).filter(function (e) { return e && e.name; }).map(function (e) {
+      return { id: e.id, folded: mentionFold(e.name) };
+    }).filter(function (e) { return e.folded.length > 0; })
+      .sort(function (a, b) { return b.folded.length - a.folded.length; });
+    var out = [];
+    if (!list.length || text.indexOf("@") < 0) return out;
+    var re = /(^|\s)@/g, m;
+    while ((m = re.exec(text)) !== null) {
+      var at = m.index + m[1].length;
+      var hit = matchMentionAt(text, at, list);
+      if (hit) { out.push(hit); re.lastIndex = hit.end; }
+    }
+    return out;
+  }
+  /* Mảng employee id bị nhắc trong nội dung (khử trùng, giữ thứ tự xuất hiện) —
+     đây là giá trị lưu vào trường mentions của doc message khi gửi. */
+  function computeMentions(content, employees) {
+    var seen = {}, ids = [];
+    findMentions(content, employees).forEach(function (h) {
+      if (!seen[h.id]) { seen[h.id] = true; ids.push(h.id); }
+    });
+    return ids;
+  }
+  /* Dựng HTML hiển thị nội dung tin: escape TOÀN BỘ nội dung trước, chỉ bọc
+     <span class="mention"> quanh các đoạn "@Tên" thuộc về người có trong mentions.
+     mentionsField là mảng id đã lưu trong doc; tin cũ chưa có trường này thì
+     suy từ nội dung theo cùng luật nhận diện. Nhắc chính người đang xem thì
+     thêm class mention-me (nền + viền nhấn nhẹ). */
+  function formatContentHtml(content, mentionsField, employees, myId) {
+    var text = String(content == null ? "" : content);
+    if (!text) return "";
+    var hits = findMentions(text, employees || []);
+    if (Array.isArray(mentionsField)) {
+      var allowed = {};
+      mentionsField.forEach(function (id) { allowed[id] = true; });
+      hits = hits.filter(function (h) { return !!allowed[h.id]; });
+    }
+    if (!hits.length) return esc(text);
+    var html = "", last = 0;
+    hits.forEach(function (h) {
+      html += esc(text.slice(last, h.start));
+      html += '<span class="mention' + (myId && h.id === myId ? " mention-me" : "") + '">' +
+        esc(text.slice(h.start, h.end)) + "</span>";
+      last = h.end;
+    });
+    html += esc(text.slice(last));
+    return html;
   }
 
   /* ---------- Phòng họp ---------- */
@@ -696,13 +844,14 @@
     box.innerHTML = state.messages.map(function (m) {
       var sender = empOfSender(m.senderId);
       var colorEmp = sender || { name: m.senderName || "?", color: "#4f46e5" };
-      var cls = "msg" + (m.kind === "Giao việc" ? " is-task" : "") + (m.kind === "Thông báo" ? " is-notice" : "");
+      var cls = "msg" + (m.kind === "Giao việc" ? " is-task" : "") + (m.kind === "Thông báo" ? " is-notice" : "") +
+        (state.highlightMsgId && state.highlightMsgId === m.id ? " msg-highlight" : "");
       var pinRow = "";
       if (m.kind === "Thông báo" && canManage()) {
         pinRow = '<div class="pin-row"><button class="btn ghost small" type="button" data-pin="' + esc(m.id) +
           '" data-state="' + (m.pinned ? "1" : "0") + '">' + (m.pinned ? "Bỏ ghim thông báo" : "Ghim thông báo") + "</button></div>";
       }
-      return '<div class="' + cls + '">' +
+      return '<div class="' + cls + '" data-msg-id="' + esc(m.id) + '">' +
         avatarHtml(colorEmp, "sm") +
         '<div class="msg-body">' +
           '<div class="meta">' +
@@ -712,7 +861,7 @@
             (m.pinned ? '<span class="chip" style="background:#ede9fe;color:#5b21b6">Đã ghim</span>' : "") +
             '<span class="time">' + esc(fmtTime(m.createdAt)) + "</span>" +
           "</div>" +
-          (m.content ? '<div class="content">' + esc(m.content) + "</div>" : "") +
+          (m.content ? '<div class="content">' + formatContentHtml(m.content, m.mentions, state.employees, state.me ? state.me.id : null) + "</div>" : "") +
           attachmentsHtml(m) +
           (m.linkedTaskTitle ? '<span class="linked-task">Đã tạo việc: ' + esc(m.linkedTaskTitle) + "</span>" : "") +
           pinRow +
@@ -725,6 +874,7 @@
 
   function scrollMessagesBottom() {
     if (state.currentTab !== "room") return;
+    if (state.highlightMsgId) return; /* đang làm nổi bật một tin — không giật xuống cuối */
     requestAnimationFrame(function () { window.scrollTo(0, document.body.scrollHeight); });
   }
 
@@ -869,6 +1019,7 @@
       showMsgError("Hãy nhập nội dung hoặc đính kèm ít nhất một tệp.");
       return;
     }
+    closeMentionBox();
     hideMsgError();
     state.sending = true;
     $("msgSendBtn").disabled = true;
@@ -891,6 +1042,7 @@
         senderTitle: state.me.title,
         content: content,
         kind: kind,
+        mentions: computeMentions(content, state.employees),
         createdAt: serverTimestamp(),
         attachments: atts,
         pinned: false
@@ -938,6 +1090,106 @@
       state.sending = false;
       $("msgSendBtn").disabled = false;
     });
+  }
+
+  /* ----- Hộp gợi ý @tag trong ô soạn tin -----
+     Gõ "@" ở đầu câu hoặc sau khoảng trắng → hộp gợi ý nhân viên hiện ngay trên
+     ô soạn; lọc theo phần chữ đã gõ sau "@" (gấp dấu, không phân biệt hoa/thường).
+     Chọn bằng chạm/click, Enter hoặc Tab; Esc đóng hộp; xoá hết đoạn đang gõ
+     (kể cả dấu @) thì ngữ cảnh nhắc biến mất và hộp tự đóng. */
+  function mentionContext(ta) {
+    var pos = ta.selectionStart;
+    if (pos == null) return null;
+    var text = ta.value.slice(0, pos);
+    var i = text.lastIndexOf("@");
+    if (i < 0) return null;
+    if (i > 0 && !/\s/.test(text.charAt(i - 1))) return null; /* @ dính liền chữ phía trước — kiểu email */
+    var query = text.slice(i + 1);
+    if (/[\s@]/.test(query)) return null;
+    return { start: i, query: query };
+  }
+  function closeMentionBox() {
+    state.mentionUI = null;
+    var box = $("mentionBox");
+    if (box) { box.classList.add("hidden"); box.innerHTML = ""; }
+  }
+  function renderMentionBox() {
+    var box = $("mentionBox");
+    var st = state.mentionUI;
+    if (!box || !st || !st.items.length) { closeMentionBox(); return; }
+    box.innerHTML = st.items.map(function (e, i) {
+      return '<button type="button" class="mention-item' + (i === st.active ? " active" : "") +
+        '" data-mention-idx="' + i + '" role="option" aria-selected="' + (i === st.active ? "true" : "false") + '">' +
+        avatarHtml(e, "sm") +
+        '<span class="m-main"><span class="m-name">' + esc(e.name || "") + "</span>" +
+        (e.title ? '<span class="m-title">' + esc(e.title) + "</span>" : "") + "</span></button>";
+    }).join("");
+    box.classList.remove("hidden");
+  }
+  function updateMentionBox(fromDelete) {
+    var ta = $("messageInput");
+    var box = $("mentionBox");
+    if (!ta || !box || !state.me) { closeMentionBox(); return; }
+    var ctx = mentionContext(ta);
+    /* Xoá ngược tới khi chỉ còn "@" trơ trọi → đóng hộp (đúng yêu cầu đóng khi
+       xoá hết phần gõ sau @); vừa gõ "@" mới thì mở danh sách đầy đủ. */
+    if (!ctx || (fromDelete && ctx.query === "")) { closeMentionBox(); return; }
+    var q = mentionFold(ctx.query);
+    var items = state.employees.filter(function (e) {
+      return e && !e.suspended && e.name && e.id !== state.me.id;
+    }).filter(function (e) {
+      return mentionFold(e.name).indexOf(q) >= 0;
+    });
+    items.sort(function (a, b) {
+      var fa = mentionFold(a.name), fb = mentionFold(b.name);
+      var sa = fa.indexOf(q) === 0 ? 0 : 1, sb = fb.indexOf(q) === 0 ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return fa < fb ? -1 : fa > fb ? 1 : 0;
+    });
+    items = items.slice(0, 8);
+    if (!items.length) { closeMentionBox(); return; }
+    var prev = state.mentionUI;
+    state.mentionUI = {
+      start: ctx.start,
+      items: items,
+      active: (prev && prev.start === ctx.start) ? Math.min(prev.active, items.length - 1) : 0
+    };
+    renderMentionBox();
+  }
+  function pickMention(idx) {
+    var st = state.mentionUI;
+    var ta = $("messageInput");
+    if (!st || !ta) return;
+    var item = st.items[idx == null ? st.active : idx];
+    if (!item) return;
+    var pos = ta.selectionStart == null ? ta.value.length : ta.selectionStart;
+    if (pos < st.start) { closeMentionBox(); return; }
+    var insert = "@" + item.name + " ";
+    ta.value = ta.value.slice(0, st.start) + insert + ta.value.slice(pos);
+    var caret = st.start + insert.length;
+    closeMentionBox();
+    ta.focus();
+    try { ta.setSelectionRange(caret, caret); } catch (e) {}
+  }
+  function onMessageKeydown(ev) {
+    var st = state.mentionUI;
+    var box = $("mentionBox");
+    if (!st || !box || box.classList.contains("hidden") || !st.items.length) return;
+    if (ev.key === "ArrowDown") {
+      ev.preventDefault();
+      st.active = (st.active + 1) % st.items.length;
+      renderMentionBox();
+    } else if (ev.key === "ArrowUp") {
+      ev.preventDefault();
+      st.active = (st.active - 1 + st.items.length) % st.items.length;
+      renderMentionBox();
+    } else if (ev.key === "Enter" || ev.key === "Tab") {
+      ev.preventDefault();
+      pickMention(st.active);
+    } else if (ev.key === "Escape") {
+      ev.preventDefault();
+      closeMentionBox();
+    }
   }
 
   /* ---------- Công việc ---------- */
@@ -1852,6 +2104,8 @@
       if (tr) setTaskStatus(tr, "Đang làm");
       return;
     }
+    var gm = t.closest("[data-goto-msg]");
+    if (gm) { closeBell(); jumpToMessage(gm.getAttribute("data-goto-msg")); return; }
     var go = t.closest("[data-goto]");
     if (go) { closeBell(); switchTab(go.getAttribute("data-goto")); return; }
     var to = t.closest("[data-taskopen]");
@@ -1872,6 +2126,25 @@
     $("logoutBtn").addEventListener("click", doLogout);
     $("noProfileLogout").addEventListener("click", doLogout);
     $("messageForm").addEventListener("submit", onSendMessage);
+    var msgInput = $("messageInput");
+    msgInput.addEventListener("input", function (ev) {
+      updateMentionBox(!!(ev.inputType && ev.inputType.indexOf("delete") === 0));
+    });
+    msgInput.addEventListener("click", function () { updateMentionBox(false); });
+    msgInput.addEventListener("keyup", function (ev) {
+      if (ev.key === "ArrowLeft" || ev.key === "ArrowRight" || ev.key === "Home" || ev.key === "End") {
+        updateMentionBox(false);
+      }
+    });
+    msgInput.addEventListener("keydown", onMessageKeydown);
+    msgInput.addEventListener("blur", function () { setTimeout(closeMentionBox, 150); });
+    $("mentionBox").addEventListener("mousedown", function (ev) {
+      var it = ev.target && typeof ev.target.closest === "function"
+        ? ev.target.closest("[data-mention-idx]") : null;
+      if (!it) return;
+      ev.preventDefault(); /* giữ focus trong ô soạn, chọn trước khi blur kịp đóng hộp */
+      pickMention(Number(it.getAttribute("data-mention-idx")));
+    });
     $("attachInput").addEventListener("change", onAttachChange);
     $("messageKind").addEventListener("change", function () {
       $("taskAssignWrap").classList.toggle("hidden", $("messageKind").value !== "Giao việc");
