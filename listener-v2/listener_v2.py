@@ -767,6 +767,136 @@ STREAMS = (
 )
 
 
+POST_QUEUE_FILE = "post-queue.jsonl"
+POST_QUEUE_OFFSET_FILE = "post-queue.offset"
+POST_QUEUE_SENT_FILE = "post-queue.sent.jsonl"
+POST_QUEUE_POLL_SECS = 10.0
+POST_QUEUE_MAX_BYTES = 1_000_000
+POST_QUEUE_MAX_PER_CYCLE = 20
+
+
+def _read_queue_offset(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except (OSError, ValueError):
+        return 0
+
+
+def _write_queue_offset(path, value):
+    tmp = f"{path}.tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(str(value))
+    os.replace(tmp, path)
+
+
+def drain_post_queue(client, queue_path, offset_path, sent_path,
+                     sender_id, sender_name, log):
+    """Post queued room messages (coordinator only, best-effort).
+
+    Queue format: 1 JSON object per line: {"kind": ..., "content": ...}.
+    Sender is ALWAYS this process's own identity (sender_id/name args)
+    — queue lines cannot impersonate anyone else.
+
+    Offset semantics: the file is append-only; offset advances past
+    each line only after that line is posted (or skipped as malformed
+    / missing kind/content). A failed post STOPS the drain without
+    advancing past the failed line, so the next cycle retries it —
+    no loss, and at most one duplicate if the process dies between a
+    successful post and its offset write. A post failure NEVER raises
+    out of this function into the listen loop (caller also guards);
+    listening coverage is more important than any queued message.
+    When fully drained and the file is large, it is compacted to
+    empty so the queue does not grow forever.
+    Returns the number of messages posted this cycle.
+    """
+    try:
+        size = os.path.getsize(queue_path)
+    except OSError:
+        return 0
+    offset = _read_queue_offset(offset_path)
+    if offset < 0 or offset > size:
+        offset = 0
+    if offset == size:
+        return 0
+    try:
+        with open(queue_path, "rb") as f:
+            f.seek(offset)
+            raw = f.read()
+    except OSError as exc:
+        log(f"post queue read error: {exc!r}")
+        return 0
+    try:
+        server_ts = _firestore.SERVER_TIMESTAMP
+    except (NameError, AttributeError):
+        server_ts = None
+    posted = 0
+    pos = offset
+    for line in raw.splitlines(keepends=True):
+        pos += len(line)
+        text = line.decode("utf-8", "replace").strip()
+        if not text:
+            _write_queue_offset(offset_path, pos)
+            continue
+        try:
+            item = json.loads(text)
+        except ValueError:
+            log("post queue: skipping malformed line")
+            _write_queue_offset(offset_path, pos)
+            continue
+        if not isinstance(item, dict):
+            log("post queue: skipping non-object line")
+            _write_queue_offset(offset_path, pos)
+            continue
+        kind = str(item.get("kind", "") or "").strip()
+        content = str(item.get("content", "") or "").strip()
+        if not kind or not content:
+            log("post queue: skipping line without kind/content")
+            _write_queue_offset(offset_path, pos)
+            continue
+        try:
+            ref = client.collection("messages").add({
+                "senderId": sender_id,
+                "senderName": sender_name,
+                "kind": kind,
+                "content": content,
+                "createdAt": server_ts,
+            })
+        except Exception as exc:
+            log(f"post queue: post failed, will retry next cycle: "
+                f"{exc!r}")
+            return posted
+        doc_id = ""
+        try:
+            doc_id = ref[1].id if isinstance(ref, tuple) else getattr(
+                ref, "id", "")
+        except Exception:
+            doc_id = ""
+        try:
+            with open(sent_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps({
+                    "doc_id": doc_id,
+                    "kind": kind,
+                    "content_len": len(content),
+                    "posted_at": datetime.now(timezone.utc).strftime(
+                        "%Y-%m-%dT%H:%M:%SZ"),
+                }, ensure_ascii=False) + "\n")
+        except OSError:
+            pass
+        _write_queue_offset(offset_path, pos)
+        posted += 1
+        if posted >= POST_QUEUE_MAX_PER_CYCLE:
+            break
+    try:
+        if pos >= os.path.getsize(queue_path) and pos >= POST_QUEUE_MAX_BYTES:
+            with open(queue_path, "wb"):
+                pass
+            _write_queue_offset(offset_path, 0)
+    except OSError:
+        pass
+    return posted
+
+
 class GrpcWorker:
     def __init__(self, args, credential):
         self.args = args
@@ -982,8 +1112,32 @@ class GrpcWorker:
             self.backoff.reset()
             monitor = threading.Thread(target=self._monitor, daemon=True)
             monitor.start()
+            # Coordinator post queue: the coordinator process is already
+            # authenticated, so queued messages post with its live
+            # client — no fresh sign-in needed. Best-effort only: a
+            # queue error must never break listening.
+            queue_dir = os.path.dirname(os.path.abspath(self.status_path))
+            queue_path = os.path.join(queue_dir, POST_QUEUE_FILE)
+            offset_path = os.path.join(queue_dir, POST_QUEUE_OFFSET_FILE)
+            sent_path = os.path.join(queue_dir, POST_QUEUE_SENT_FILE)
+            sender_name = (self.args.self_names.split(",")[0].strip()
+                           if self.args.self_names
+                           else self.args.self_sender_id)
+            last_queue_drain = 0.0
             while not self.stop_event.is_set():
                 time.sleep(0.5)
+                if self.args.mode == "coordinator":
+                    now = time.time()
+                    if now - last_queue_drain >= POST_QUEUE_POLL_SECS:
+                        last_queue_drain = now
+                        try:
+                            n = drain_post_queue(
+                                client, queue_path, offset_path, sent_path,
+                                self.args.self_sender_id, sender_name, log)
+                            if n:
+                                log(f"post queue: posted {n} message(s)")
+                        except Exception as exc:
+                            log(f"post queue error: {exc!r}")
             break
         for watch in self.watches:
             try:
