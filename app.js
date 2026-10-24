@@ -25,6 +25,10 @@
     decisionsLoaded: false,
     decisionsLoading: false,
     checkIntervalMinutes: 10,
+    ackTimeoutHours: 24,      // phase 2: ngưỡng quá hạn xác nhận nhận việc (giờ), lấy từ settings/room
+    approvalsHistory: [],     // phase 2: hồ sơ duyệt đã quyết đã tải (collection approvals)
+    approvalsHistoryLoaded: false,
+    approvalsHistoryLoading: false,
     checkinTimer: null,
     lastCheckinAt: 0,      // mốc check-in thành công gần nhất của chính mình (lạc quan, tại máy này)
     lastCheckinTry: 0,     // mốc lần thử check-in gần nhất (chống ghi dồn khi focus/visible)
@@ -571,6 +575,9 @@
     var canEdit = isDirector();
     $("intervalInput").disabled = !canEdit;
     $("intervalSave").disabled = !canEdit;
+    var ackIn = $("ackTimeoutInput"), ackBtn = $("ackTimeoutSave");
+    if (ackIn) ackIn.disabled = !canEdit;
+    if (ackBtn) ackBtn.disabled = !canEdit;
     startListeners();
     startCheckin();
     startClock();
@@ -678,17 +685,29 @@
     );
     state.unsub.push(
       db.collection("settings").doc("room").onSnapshot(function (doc) {
-        var v = doc.exists ? doc.data().checkIntervalMinutes : null;
+        var d = doc.exists ? doc.data() : {};
+        var v = d.checkIntervalMinutes;
         var n = parseInt(v, 10);
         var next = (!isNaN(n) && n > 0) ? n : 10;
         var changed = next !== state.checkIntervalMinutes;
         state.checkIntervalMinutes = next;
         var input = $("intervalInput");
         if (document.activeElement !== input) input.value = String(next);
+        /* Phase 2 — ngưỡng quá hạn xác nhận, cùng doc settings/room. */
+        var av = parseInt(d.ackTimeoutHours, 10);
+        var anext = (!isNaN(av) && av >= 1 && av <= 168) ? av : 24;
+        var achanged = anext !== state.ackTimeoutHours;
+        state.ackTimeoutHours = anext;
+        var ainput = $("ackTimeoutInput");
+        if (ainput && document.activeElement !== ainput) ainput.value = String(anext);
         if (changed && state.user) {
           startCheckin();
           renderOverview();
           renderEmployeesTab();
+        }
+        if (achanged && state.user) {
+          renderOverview();
+          renderBell();
         }
       }, function (e) { console.warn("settings listener:", e); })
     );
@@ -793,19 +812,24 @@
     var mentions = mentionUnreadMessages();
     var mine = [];
     var review = [];
+    var ackOverdue = [];
     if (state.me) {
       mine = state.tasks.filter(function (t) {
         return t.assigneeId === state.me.id && t.status === "Chờ nhận";
       });
       if (canApprove()) {
         review = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
+        /* Phase 2 — việc quá hạn xác nhận của NGƯỜI KHÁC (việc của mình đã
+           nằm trong mine nên không cộng thêm, tránh đếm trùng một việc
+           hai lần — cùng nguyên tắc dedup như mentions/unread). */
+        ackOverdue = ackOverdueTasks().filter(function (t) { return t.assigneeId !== state.me.id; });
       }
     }
     /* Tổng mục chưa xử lý = tin chưa đọc (ĐÃ gồm các tin nhắc tên mình — chúng là
        tập con của tin chưa đọc nên không cộng thêm lần nữa) + việc chờ mình nhận
-       + việc chờ duyệt. Lấy max(unread, mentions) hay cộng mentions vào unread
+       + việc chờ duyệt + việc quá hạn xác nhận của người khác. Lấy max(unread, mentions) hay cộng mentions vào unread
        đều sai: một là thiếu, hai là đếm trùng. */
-    return { unread: unread, mentions: mentions, mine: mine, review: review, total: unread + mine.length + review.length };
+    return { unread: unread, mentions: mentions, mine: mine, review: review, ackOverdue: ackOverdue, total: unread + mine.length + review.length + ackOverdue.length };
   }
   function renderBell() {
     var badge = $("bellBadge");
@@ -845,6 +869,11 @@
       html += '<div class="bell-item" data-goto="tasks"><span class="dot" style="margin-top:6px;background:#f59e0b"></span>' +
         '<div class="b-text">Việc chờ duyệt: <b>' + esc(t.title || "") + '</b>' +
         '<div class="b-sub">Phụ trách: ' + esc(empName(t.assigneeId)) + '</div></div></div>';
+    });
+    b.ackOverdue.forEach(function (t) {
+      html += '<div class="bell-item" data-goto="tasks"><span class="dot" style="margin-top:6px;background:#b3261e"></span>' +
+        '<div class="b-text">Việc quá hạn xác nhận: <b>' + esc(t.title || "") + '</b>' +
+        '<div class="b-sub">Phụ trách: ' + esc(empName(t.assigneeId)) + ' · chờ ' + esc(ageText(ackAgeMs(t))) + '</div></div></div>';
     });
     box.innerHTML = html || '<div class="bell-empty">Không có thông báo mới.</div>';
   }
@@ -1409,6 +1438,41 @@
     var ms = tsMillis(t.dueAt);
     return !!ms && ms < Date.now();
   }
+  /* Phase 2 — quá hạn xác nhận nhận việc + thời gian chờ duyệt. Tất cả tính
+     từ dữ liệu thật (createdAt / history.at); thiếu mốc thời gian thì không
+     kết luận, không bịa. */
+  function ageText(ms) {
+    if (ms === null || ms === undefined || ms < 0) return "";
+    var h = Math.floor(ms / 3600000);
+    if (h < 1) return "dưới 1 giờ";
+    if (h < 48) return h + " giờ";
+    return Math.floor(h / 24) + " ngày";
+  }
+  function ackAgeMs(t) {
+    var ms = tsMillis(t ? t.createdAt : null);
+    return ms ? (Date.now() - ms) : null;
+  }
+  function isAckOverdue(t) {
+    if (!t || t.status !== "Chờ nhận") return false;
+    var age = ackAgeMs(t);
+    if (age === null) return false;
+    return age > (state.ackTimeoutHours || 24) * 3600 * 1000;
+  }
+  function ackOverdueTasks() {
+    return state.tasks.filter(isAckOverdue);
+  }
+  function waitMs(t) {
+    /* Thời gian chờ duyệt: từ lần cuối việc chuyển sang "Chờ duyệt" (ghi
+       trong history), fallback về lúc tạo việc; thiếu cả hai thì null. */
+    var hist = (t.history || []).slice().reverse();
+    for (var i = 0; i < hist.length; i++) {
+      if (hist[i].to === "Chờ duyệt") {
+        var ms = tsMillis(hist[i].at);
+        if (ms) return Date.now() - ms;
+      }
+    }
+    return ackAgeMs(t);
+  }
   function dueChipHtml(t) {
     if (!t.dueAt) return "";
     if (isOverdue(t)) {
@@ -1422,6 +1486,8 @@
       list = list.filter(function (t) { return t.assigneeId === state.me.id; });
     } else if (state.taskFilter === "overdue") {
       list = list.filter(isOverdue);
+    } else if (state.taskFilter === "ackoverdue") {
+      list = list.filter(isAckOverdue);
     }
     return list;
   }
@@ -1539,6 +1605,7 @@
           (t.updatedAt ? " · Cập nhật: " + esc(fmtTime(t.updatedAt)) : "") + "</div>" +
           (needsAck
             ? '<div class="row"><span class="chip">Đã gửi — chưa xác nhận</span>' +
+              (isAckOverdue(t) ? '<span class="chip" style="border-color:#FECDC2;color:#b3261e">Quá hạn xác nhận · chờ ' + esc(ageText(ackAgeMs(t))) + '</span>' : "") +
               '<button class="btn primary small" type="button" data-ack="' + esc(t.id) + '">Xác nhận nhận việc</button></div>'
             : '<div class="row"><span>Trạng thái:</span><select class="task-status">' + opts + "</select></div>") +
           '<div class="t-note-label">Ghi chú kết quả</div>' +
@@ -1689,6 +1756,7 @@
       "<h3>Cập nhật việc</h3>" +
       (needsAckModal
         ? '<div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip">Đã gửi — chưa xác nhận</span>' +
+          (isAckOverdue(t) ? '<span class="chip" style="border-color:#FECDC2;color:#b3261e">Quá hạn xác nhận · chờ ' + esc(ageText(ackAgeMs(t))) + '</span>' : "") +
           '<button class="btn primary small" type="button" data-ack="' + esc(t.id) + '">Xác nhận nhận việc</button></div>'
         : "") +
       '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
@@ -1793,6 +1861,20 @@
     $("statDoing").textContent = String(doing);
     $("statDone").textContent = String(done);
 
+    /* Phase 2 — banner cảnh báo quá hạn xác nhận (chỉ quản lý thấy, chỉ hiện
+       khi có việc thật quá hạn; số liệu từ dữ liệu thật, không bịa). */
+    var ackBanner = $("ackOverdueBanner");
+    if (ackBanner) {
+      var ao = canManage() ? ackOverdueTasks() : [];
+      if (ao.length) {
+        ackBanner.innerHTML = '<div class="card" style="padding:10px 12px;border-color:#FECDC2">⚠ Có <b>' + ao.length + '</b> việc quá hạn xác nhận (chưa xác nhận quá ' + (state.ackTimeoutHours || 24) + ' giờ). Xem tab Công việc, lọc “Quá hạn xác nhận”.</div>';
+        ackBanner.classList.remove("hidden");
+      } else {
+        ackBanner.innerHTML = "";
+        ackBanner.classList.add("hidden");
+      }
+    }
+
     var grid = $("overviewGrid");
     if (!state.employees.length) {
       grid.innerHTML = '<p class="hint">Chưa có hồ sơ nhân viên nào.</p>';
@@ -1847,6 +1929,76 @@
     }).join("");
   }
 
+  /* Phase 2 — retry có giới hạn cho các lượt ĐỌC Firestore (tối đa 3 lần,
+     chờ tăng dần). Chỉ dùng cho đọc: ghi vẫn 1 lần để tránh ghi trùng
+     (history arrayUnion có timestamp nên retry ghi sẽ tạo 2 sự kiện). */
+  function getWithRetry(query, attempts) {
+    attempts = attempts || 3;
+    function attempt(n) {
+      return query.get().catch(function (e) {
+        if (n < attempts) {
+          return new Promise(function (res) { setTimeout(res, n * 600); }).then(function () { return attempt(n + 1); });
+        }
+        throw e;
+      });
+    }
+    return attempt(1);
+  }
+
+  /* Phase 2 — khối hồ sơ duyệt đã quyết trong hộp duyệt. Vẽ lại từ state
+     mỗi lần renderApproval chạy nên không mất khi bảng việc tải lại; dữ
+     liệu gốc nằm ở collection approvals (bền vững qua tải lại trang). */
+  function renderApprovalHistoryBlock() {
+    var h = '<div style="margin-top:14px">' +
+      '<h3 style="margin:0 0 4px">Hồ sơ đã quyết</h3>' +
+      '<p class="hint" style="margin-top:0">Hồ sơ phê duyệt đã có quyết định, tải trực tiếp từ collection approvals — không phụ thuộc trạng thái việc hiện tại.</p>' +
+      '<div style="margin-bottom:8px"><button class="btn primary small" type="button" id="apHistoryBtn">Tải hồ sơ đã quyết</button> ' +
+      '<span id="apHistoryStatus" class="hint">' +
+      (state.approvalsHistoryLoading ? "Đang tải…" :
+        (state.approvalsHistoryLoaded ? "Đã tải " + state.approvalsHistory.length + " hồ sơ đã quyết." : "")) +
+      "</span></div>" +
+      '<div id="apHistoryList">';
+    if (!state.approvalsHistoryLoaded) {
+      h += '<p class="hint">Chưa tải — bấm nút để tải.</p>';
+    } else if (!state.approvalsHistory.length) {
+      h += '<p class="hint">Chưa có hồ sơ duyệt đã quyết.</p>';
+    } else {
+      h += state.approvalsHistory.map(function (a) {
+        return '<div class="activity-item"><span class="a-actor">' + esc(a.decidedByName || "") + "</span>" +
+          "<span>" + esc(a.decision === "Duyệt" ? "Đã duyệt" : "Đã trả lại") + " việc “" + esc(a.taskTitle || "") + "”" +
+          (a.assigneeName ? " (phụ trách: " + esc(a.assigneeName) + ")" : "") +
+          " — lý do: " + esc(a.reason ? a.reason : "không ghi lý do") +
+          " — bằng chứng: " + esc(a.evidence ? a.evidence : "không kèm bằng chứng") + "</span>" +
+          '<span class="a-time">' + esc(relText(a.decidedAt)) + "</span></div>";
+      }).join("");
+    }
+    h += "</div></div>";
+    return h;
+  }
+  function loadApprovalsHistory() {
+    if (!db || state.approvalsHistoryLoading) return;
+    state.approvalsHistoryLoading = true;
+    renderApproval();
+    /* Không lọc bằng where ở server để khỏi cần composite index: lấy 50 hồ
+       sơ mới nhất theo decidedAt rồi lọc quyết định đã xong ở máy khách.
+       decidedAt null (hồ sơ chờ) xếp cuối khi orderBy desc nên không lấn
+       chỗ của hồ sơ đã quyết. */
+    getWithRetry(db.collection("approvals").orderBy("decidedAt", "desc").limit(50)).then(function (snap) {
+      state.approvalsHistory = snap.docs.map(function (d) {
+        var o = d.data(); o.id = d.id; return o;
+      }).filter(function (a) { return a.status && a.status !== "pending"; });
+      state.approvalsHistoryLoaded = true;
+      state.approvalsHistoryLoading = false;
+      renderApproval();
+    }).catch(function (e) {
+      state.approvalsHistoryLoading = false;
+      renderApproval();
+      var st = $("apHistoryStatus");
+      if (st) st.textContent = "Tải thất bại — có thể Firestore Rules chưa mở collection “approvals”. Thử lại sau.";
+      console.warn("load approvals history:", e);
+    });
+  }
+
   /* Hộp duyệt (phase 1, kiểu Inbox): việc Chờ duyệt, mỗi mục là 1 hồ sơ
      phê duyệt riêng. Mỗi mục có ô lý do (bắt buộc) + ô bằng chứng +
      nút Duyệt / Trả lại. KHÔNG có nút duyệt tất cả vô điều kiện:
@@ -1873,9 +2025,15 @@
       return;
     }
     var list = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
-    sec.classList.toggle("hidden", !list.length);
-    if (!list.length) { box.innerHTML = ""; return; }
-    var html =
+    /* Phase 2 — inbox bền vững: quản lý luôn thấy hộp duyệt (kể cả khi hàng
+       chờ rỗng) + hồ sơ đã quyết tải từ collection approvals. */
+    sec.classList.remove("hidden");
+    var html = "";
+    if (list.length) {
+      var waits = list.map(waitMs).filter(function (x) { return x !== null; });
+      var oldest = waits.length ? ageText(Math.max.apply(null, waits)) : "chưa rõ thời gian chờ";
+      html += '<p class="hint">Hàng chờ: <b>' + list.length + '</b> mục · chờ lâu nhất: <b>' + esc(oldest) + '</b> (tính từ lúc việc chuyển sang “Chờ duyệt”).</p>';
+      html +=
       '<p class="hint">Mỗi mục là một hồ sơ phê duyệt riêng (người duyệt, thời điểm, kết quả từng mục được lưu riêng). Không có nút duyệt tất cả vô điều kiện.</p>' +
       '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">' +
         '<label style="margin:0;white-space:nowrap"><input type="checkbox" id="apSelectAll"> Chọn tất cả</label>' +
@@ -1902,6 +2060,10 @@
         '<button class="btn primary small" type="button" data-approve="' + esc(t.id) + '">Duyệt — Hoàn thành</button>' +
         '<button class="btn ghost small" type="button" data-return="' + esc(t.id) + '">Trả lại — Đang làm</button></div>';
     }).join("");
+    } else {
+      html += '<p class="hint">Không có mục chờ duyệt.</p>';
+    }
+    html += renderApprovalHistoryBlock();
     box.innerHTML = html;
     var selAll = $("apSelectAll");
     if (selAll) selAll.addEventListener("change", function () {
@@ -1910,6 +2072,8 @@
     });
     var batchBtn = $("apBatchBtn");
     if (batchBtn) batchBtn.addEventListener("click", runBatchApprove);
+    var histBtn = $("apHistoryBtn");
+    if (histBtn) histBtn.addEventListener("click", loadApprovalsHistory);
   }
 
   /* Quyết định 1 mục: chặn tự phê duyệt, chặn duyệt việc quan trọng khi
@@ -2060,7 +2224,7 @@
     state.decisionsLoading = true;
     var st = $("decisionsStatus");
     if (st) st.textContent = "Đang tải…";
-    db.collection("decisions").orderBy("createdAt", "desc").limit(50).get().then(function (snap) {
+    getWithRetry(db.collection("decisions").orderBy("createdAt", "desc").limit(50)).then(function (snap) {
       state.decisions = snap.docs.map(function (d) {
         var o = d.data(); o.id = d.id; return o;
       });
@@ -2445,6 +2609,7 @@
     openTasks.forEach(function (t) { if (t.role && jobRoles.indexOf(t.role) === -1) jobRoles.push(t.role); });
     var reviewCount = myTasks.filter(function (t) { return t.status === "Chờ duyệt"; }).length;
     var unackedCount = myTasks.filter(function (t) { return t.status === "Chờ nhận"; }).length;
+    var ackOverdueCount = myTasks.filter(isAckOverdue).length;
     var commentCount = 0;
     state.tasks.forEach(function (t) { (t.comments || []).forEach(function (c) { if (c.authorId === e.id) commentCount++; }); });
     var p = presenceOf(e);
@@ -2520,6 +2685,7 @@
         '<div class="ps"><b>' + sent + "</b><span>Tin đã gửi</span></div>" +
         '<div class="ps"><b>' + reviewCount + "</b><span>Việc chờ duyệt</span></div>" +
         '<div class="ps"><b>' + unackedCount + "</b><span>Chưa xác nhận</span></div>" +
+        '<div class="ps"><b>' + ackOverdueCount + "</b><span>Quá hạn xác nhận</span></div>" +
         '<div class="ps"><b>' + commentCount + "</b><span>Bình luận đã gửi</span></div>" +
       "</div>" +
       "<h3>Cấp dưới (" + subs.length + ")</h3>" + subsHtml +
@@ -2559,6 +2725,34 @@
         msg.style.color = "var(--danger)";
         msg.classList.remove("hidden");
         console.warn("save interval:", e);
+      });
+  }
+
+  /* Phase 2 — lưu ngưỡng quá hạn xác nhận (giờ), mirror onSaveInterval. */
+  function onSaveAckTimeout() {
+    if (!isDirector() || !db) return;
+    var n = parseInt($("ackTimeoutInput").value, 10);
+    var msg = $("ackTimeoutMsg");
+    msg.classList.add("hidden");
+    if (isNaN(n) || n < 1 || n > 168) {
+      msg.textContent = "Số giờ phải từ 1 đến 168.";
+      msg.style.color = "var(--danger)";
+      msg.classList.remove("hidden");
+      return;
+    }
+    db.collection("settings").doc("room").set({ ackTimeoutHours: n }, { merge: true })
+      .then(function () {
+        state.ackTimeoutHours = n;
+        msg.textContent = "Đã lưu: việc quá " + n + " giờ chưa xác nhận sẽ bị đánh dấu quá hạn xác nhận.";
+        msg.style.color = "var(--ok)";
+        msg.classList.remove("hidden");
+        renderOverview(); renderBell(); renderTasks();
+      })
+      .catch(function (e) {
+        msg.textContent = "Lưu thất bại. Vui lòng thử lại.";
+        msg.style.color = "var(--danger)";
+        msg.classList.remove("hidden");
+        console.warn("save ack timeout:", e);
       });
   }
 
@@ -3566,6 +3760,8 @@
       $("empFormSuccess").classList.add("hidden");
     });
     $("intervalSave").addEventListener("click", onSaveInterval);
+    var ackSaveBtn = $("ackTimeoutSave");
+    if (ackSaveBtn) ackSaveBtn.addEventListener("click", onSaveAckTimeout);
     $("passwordSave").addEventListener("click", onChangePassword);
     /* Bảo mật 2FA của Giám đốc: cổng xác minh + thẻ bảo mật + trình bật 2FA */
     $("gateForm").addEventListener("submit", onGateSubmit);
