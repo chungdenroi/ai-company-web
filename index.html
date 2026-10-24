@@ -777,6 +777,13 @@
 
       <h2 class="pane-title section-gap">Nhật ký hoạt động công ty</h2>
       <div class="card" style="padding:8px 18px"><div id="activityList" class="activity-list"></div></div>
+
+      <h2 class="pane-title section-gap">Nhật ký quyết định</h2>
+      <div class="card" style="padding:8px 18px">
+        <p class="hint" style="margin-top:2px">Ghi lại mọi quyết định duyệt / trả lại / hoàn thành kèm lý do, để nhân viên thấy được. Chỉ tải khi bấm nút — không nghe trực tiếp, để tiết kiệm lượt đọc Firestore.</p>
+        <div style="margin-bottom:8px"><button class="btn primary small" type="button" id="decisionsLoadBtn">Tải nhật ký quyết định</button> <span id="decisionsStatus" class="hint"></span></div>
+        <div id="decisionsList" class="activity-list"></div>
+      </div>
     </section>
 
     <!-- Tab Sơ đồ tổ chức -->
@@ -843,6 +850,10 @@
           <div>
             <label for="taskAssignee">Người phụ trách</label>
             <select id="taskAssignee"></select>
+          </div>
+          <div>
+            <label for="taskRole">Vai trò của job này (không bắt buộc)</label>
+            <input type="text" id="taskRole" placeholder="VD: QA, Editor, Dev…">
           </div>
           <div>
             <label for="taskDue">Hạn hoàn thành (không bắt buộc)</label>
