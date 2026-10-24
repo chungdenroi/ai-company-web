@@ -2347,7 +2347,7 @@
           "<dt>Tài khoản Muse</dt><dd>" + esc(e.accountLabel || "—") + "</dd>" +
           "<dt>Hồ sơ trình duyệt</dt><dd>" + esc(e.browserProfile || "—") + "</dd>" +
           "<dt>Email đăng nhập</dt><dd>" + esc(e.loginEmail || "—") + "</dd>" +
-          "<dt>Mã truy cập</dt><dd class=\"mono\">" + esc(e.accessCode || "—") + "</dd>" +
+          "<dt>Mã truy cập</dt><dd>Chỉ cấp qua kênh chính thức, không hiển thị tại đây</dd>" +
           "<dt>Hoạt động gần nhất</dt><dd>" + (act ? esc(fmtTime(act.ts)) + " (" + esc(fmtRel(act.ts)) + " trước)" : "Chưa từng vào phòng họp") + "</dd>" +
           "<dt>Kích hoạt</dt><dd>" + (e.provisioning === "pending" ? "Chờ mở trình duyệt (provisioning: pending)" : "Đã kích hoạt") + "</dd>" +
         "</dl>" +
@@ -2676,7 +2676,7 @@
         "<dt>Tài khoản Muse</dt><dd>" + esc(e.accountLabel || "—") + "</dd>" +
         "<dt>Hồ sơ trình duyệt</dt><dd>" + esc(e.browserProfile || "—") + "</dd>" +
         "<dt>Email đăng nhập</dt><dd>" + esc(e.loginEmail || "—") + "</dd>" +
-        "<dt>Mã truy cập</dt><dd class=\"mono\">" + esc(e.accessCode || "—") + "</dd>" +
+        "<dt>Mã truy cập</dt><dd>Chỉ cấp qua kênh chính thức, không hiển thị tại đây</dd>" +
       "</dl>" +
       '<div class="profile-stats">' +
         '<div class="ps"><b>' + open + "</b><span>Việc đang mở</span></div>" +
