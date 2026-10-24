@@ -20,6 +20,8 @@ Su dung (runner that, khong phai file nay tu chay):
   token, _ = sign_in(API_KEY_CONG_KHAI, email, code_qua_stdin)
   post_message(PROJECT, token, build_chat_payload(own_id, own_name, text))
   patch_heartbeat(PROJECT, token, own_employee_doc_id, now_iso)
+  set_work(PROJECT, token, employee_doc_id, sender_id, sender_name,
+           work, task_id, progress, blocker, now_iso)
   append_task_history(PROJECT, token, task_doc_id,
                       build_task_history_entry(...))
 """
@@ -29,6 +31,7 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 
 IDENTITY_URL_TMPL = ("https://identitytoolkit.googleapis.com/v1/"
                       "accounts:signInWithPassword?key={key}")
@@ -169,6 +172,82 @@ def patch_heartbeat(project, id_token, employee_doc_id, now_iso, http=None):
     status, resp = http("PATCH", url, _auth_headers(id_token), body)
     _check(status, resp, "patch heartbeat")
     return True
+
+
+def _utc_now_iso():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _patch_fields(project, id_token, collection, doc_id, fields, http):
+    """PATCH 1 doc voi updateMask cho cac field. PATCH tao doc neu
+    chua co (theo semantics Firestore REST). Tra ve True."""
+    http = http or _default_http
+    masks = "&".join(f"updateMask.fieldPaths={k}" for k in fields)
+    url = f"{_doc_base(project)}/{collection}/{doc_id}?{masks}"
+    body = {"fields": fields}
+    status, resp = http("PATCH", url, _auth_headers(id_token), body)
+    _check(status, resp, f"patch {collection}/{doc_id}")
+    return True
+
+
+def set_work(project, id_token, employee_doc_id, sender_id, sender_name,
+             work, task_id="", progress="", blocker="", now_iso=None,
+             http=None):
+    """Gop 3 viec 1 lenh khi bat dau/doi viec (Pha 1) — goi ngay, dung
+    cho toi khi xong viec moi doi:
+      1. PATCH presence/<employee_doc_id>: status, currentWork,
+         taskId, progress, blocker, lastSeen.
+      2. PATCH employees/<employee_doc_id>: currentWork (the web
+         hien tai doc truong nay nen doi the ngay).
+      3. POST messages: tin trang thai, kind 'Cap nhat tien do'.
+    employee_doc_id rong -> dung sender_id (doc nhan vien thuong key
+    theo sender; neu doc cua ban co id khac thi truyen rieng).
+    Loi o buoc nao thi dung o buoc do (429 -> RateLimited, caller
+    pause dai; khong dang tin trang thai khi presence chua ghi duoc).
+    Tra ve dict {presence, employee, message}."""
+    doc_id = (employee_doc_id or "").strip() or (sender_id or "").strip()
+    if not doc_id:
+        raise ValueError("set_work: employee_doc_id/sender_id rong — "
+                         "khong biet ghi presence cho ai")
+    if not (sender_id or "").strip():
+        raise ValueError("set_work: sender_id rong — "
+                         "khong dang tin khong danh tinh")
+    if not (sender_name or "").strip():
+        raise ValueError("set_work: sender_name rong — "
+                         "khong dang tin khong danh tinh")
+    if not (work or "").strip():
+        raise ValueError("set_work: work rong — "
+                         "khong co viec gi de bao")
+    now = now_iso or _utc_now_iso()
+    presence_fields = {
+        "status": {"stringValue": "Đang làm"},
+        "currentWork": {"stringValue": work},
+        "taskId": {"stringValue": task_id or ""},
+        "progress": {"stringValue": progress or ""},
+        "blocker": {"stringValue": blocker or ""},
+        "lastSeen": {"timestampValue": now},
+    }
+    _patch_fields(project, id_token, "presence", doc_id,
+                  presence_fields, http)
+    _patch_fields(project, id_token, "employees", doc_id,
+                  {"currentWork": {"stringValue": work}}, http)
+    parts = [f"Đang làm: {work}"]
+    if task_id:
+        parts.append(f"Việc: {task_id}")
+    if progress:
+        parts.append(f"Tiến độ: {progress}")
+    if blocker:
+        parts.append(f"Kẹt: {blocker}")
+    payload = {"fields": {
+        "senderId": {"stringValue": sender_id},
+        "senderName": {"stringValue": sender_name},
+        "kind": {"stringValue": "Cập nhật tiến độ"},
+        "content": {"stringValue": " — ".join(parts)},
+        "createdAt": {"timestampValue": now},
+    }}
+    name = post_document(project, id_token, "messages", payload,
+                         http=http)
+    return {"presence": True, "employee": True, "message": name}
 
 
 def append_task_history(project, id_token, task_doc_id, history_entry,
