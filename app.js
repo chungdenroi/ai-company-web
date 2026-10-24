@@ -645,7 +645,7 @@
         });
         renderMessages();
         renderPinned();
-        if (state.currentTab === "room") markRoomRead(); else { refreshUnreadBadge(); renderBell(); }
+        if (state.currentTab === "room") markRoomRead(); else { refreshUnreadBadge(); renderBell(); renderInbox(); }
       }, function (e) { console.warn("messages listener:", e); })
     );
     state.unsub.push(
@@ -659,6 +659,7 @@
         var aeAp = document.activeElement;
         if (!(aeAp && aeAp.closest && aeAp.closest("#approvalList"))) renderApproval();
         renderBell();
+        renderInbox();
         renderTaskModalIfOpen();
       }, function (e) { console.warn("tasks listener:", e); })
     );
@@ -672,6 +673,7 @@
         renderEmployeesTab();
         renderAssigneeOptions();
         renderBell();
+        renderInbox();
         renderSelfStatus();
       }, function (e) { console.warn("employees listener:", e); })
     );
@@ -789,19 +791,24 @@
   }
 
   /* ---------- Tabs ---------- */
-  var TABS = ["overview", "org", "room", "tasks", "employees", "settings"];
+  var TABS = ["overview", "org", "room", "tasks", "inbox", "employees", "settings"];
   function switchTab(name) {
+    if (name === "more") { toggleMoreMenu(); return; }
     state.currentTab = name;
     var tabs = document.querySelectorAll("#tabBar .tab");
     tabs.forEach(function (t) { t.classList.toggle("active", t.getAttribute("data-tab") === name); });
     TABS.forEach(function (k) {
       $("tab-" + k).classList.toggle("hidden", k !== name);
     });
+    closeMoreMenu();
+    var moreBtn = document.querySelector("#tabBar .tab-more");
+    if (moreBtn) moreBtn.classList.toggle("active", ["org", "employees", "settings"].indexOf(name) !== -1);
     if (name === "room") {
       markRoomRead();
       scrollMessagesBottom();
     } else {
       closeMentionBox();
+      if (name === "inbox") renderInbox();
     }
   }
 
@@ -837,6 +844,8 @@
     var b = bellData();
     badge.textContent = String(b.total);
     badge.classList.toggle("hidden", b.total === 0);
+    var ib = $("inboxBadge");
+    if (ib) { ib.textContent = String(b.total); ib.classList.toggle("hidden", b.total === 0); }
     if (!$("bellPanel").classList.contains("hidden")) renderBellList(b);
   }
   function snippetOf(text) {
@@ -887,6 +896,58 @@
     var panel = $("bellPanel");
     if (panel) panel.classList.add("hidden");
   }
+
+  /* Trung tâm điều phối M06 — Hộp thư công việc: gom từ bellData() (tin nhắc
+     tên, tin chưa đọc, việc chờ mình nhận, việc chờ duyệt, việc quá hạn xác
+     nhận). Không tạo collection mới; bellData đã tránh đếm trùng. Bấm mục
+     nào cũng đi thẳng tới đúng chỗ (tin nhắn / chi tiết việc / phòng họp)
+     nhờ bộ xử lý click toàn cục đã có (data-goto-msg / data-taskopen /
+     data-goto). */
+  function renderInbox() {
+    var box = $("inboxList");
+    if (!box) return;
+    if (!state.me) { box.innerHTML = '<p class="hint">Đăng nhập để xem hộp thư.</p>'; return; }
+    var b = bellData();
+    function group(title, itemsHtml) {
+      if (!itemsHtml) return "";
+      return '<div class="inbox-group"><h3>' + title + "</h3>" + itemsHtml + "</div>";
+    }
+    var html = "";
+    html += group("Nhắc đến bạn", b.mentions.map(function (m) {
+      return '<button class="inbox-item" type="button" data-goto-msg="' + esc(m.id) + '">' +
+        '<span class="dot" style="margin-top:6px;background:#0a7bef"></span>' +
+        '<div class="i-text"><b>' + esc(m.senderName || "") + '</b> nhắc đến bạn trong phòng họp' +
+        '<div class="i-sub">' + esc(snippetOf(m.content)) + "</div></div></button>";
+    }).join(""));
+    var restUnread = b.unread - b.mentions.length;
+    if (restUnread > 0) {
+      html += group("Tin phòng họp chưa đọc", '<button class="inbox-item" type="button" data-goto="room">' +
+        '<span class="dot late" style="margin-top:6px"></span>' +
+        '<div class="i-text"><b>' + (b.mentions.length ? "Còn " : "") + restUnread + " tin phòng họp chưa đọc</b>" +
+        '<div class="i-sub">Bấm để vào phòng họp xem và nhận việc</div></div></button>');
+    }
+    html += group("Việc chờ bạn nhận", b.mine.map(function (t) {
+      return '<button class="inbox-item" type="button" data-taskopen="' + esc(t.id) + '">' +
+        '<span class="dot on" style="margin-top:6px"></span>' +
+        '<div class="i-text">Việc chờ bạn nhận: <b>' + esc(t.title || "") + '</b>' +
+        '<div class="i-sub">Giao bởi: ' + esc(empName(t.assignerId)) + "</div></div></button>";
+    }).join(""));
+    html += group("Việc chờ duyệt", b.review.map(function (t) {
+      return '<button class="inbox-item" type="button" data-taskopen="' + esc(t.id) + '">' +
+        '<span class="dot" style="margin-top:6px;background:#f59e0b"></span>' +
+        '<div class="i-text">Việc chờ duyệt: <b>' + esc(t.title || "") + '</b>' +
+        '<div class="i-sub">Phụ trách: ' + esc(empName(t.assigneeId)) + "</div></div></button>";
+    }).join(""));
+    html += group("Việc quá hạn xác nhận", b.ackOverdue.map(function (t) {
+      return '<button class="inbox-item" type="button" data-taskopen="' + esc(t.id) + '">' +
+        '<span class="dot" style="margin-top:6px;background:#b3261e"></span>' +
+        '<div class="i-text">Việc quá hạn xác nhận: <b>' + esc(t.title || "") + '</b>' +
+        '<div class="i-sub">Phụ trách: ' + esc(empName(t.assigneeId)) + " · chờ " + esc(ageText(ackAgeMs(t))) + "</div></div></button>";
+    }).join(""));
+    box.innerHTML = html || '<div class="card" style="padding:16px"><p class="hint" style="margin:0">Không có mục nào cần xử lý.</p></div>';
+  }
+  function closeMoreMenu() { var m = $("moreMenu"); if (m) m.classList.add("hidden"); }
+  function toggleMoreMenu() { var m = $("moreMenu"); if (m) m.classList.toggle("hidden"); }
   /* Bấm một lượt nhắc trong chuông: vào phòng họp và làm nổi bật đúng tin đó
      trong ~2,8 giây (class msg-highlight), cuộn tin vào giữa màn hình. */
   function jumpToMessage(id) {
@@ -3794,6 +3855,10 @@
     var tabs = document.querySelectorAll("#tabBar .tab");
     tabs.forEach(function (tb) {
       tb.addEventListener("click", function () { switchTab(tb.getAttribute("data-tab")); });
+    });
+    var moreItems = document.querySelectorAll("#moreMenu [data-more-goto]");
+    moreItems.forEach(function (mi) {
+      mi.addEventListener("click", function () { closeMoreMenu(); switchTab(mi.getAttribute("data-more-goto")); });
     });
     var filters = document.querySelectorAll("#taskFilters .filter-btn");
     filters.forEach(function (fb) {
