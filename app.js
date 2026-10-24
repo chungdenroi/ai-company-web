@@ -1080,7 +1080,7 @@
             '<span class="sender">' + esc(m.senderName || "") + "</span>" +
             (m.senderTitle ? '<span class="title">' + esc(m.senderTitle) + "</span>" : "") +
             '<span class="' + kindClass(m.kind) + '">' + esc(m.kind || "Trao đổi") + "</span>" +
-            (m.pinned ? '<span class="chip" style="background:#ede9fe;color:#5b21b6">Đã ghim</span>' : "") +
+            (m.pinned ? '<span class="chip" style="background:#eef1f4;color:#374151">Đã ghim</span>' : "") +
             '<span class="time">' + esc(fmtTime(m.createdAt)) + "</span>" +
           "</div>" +
           (m.content ? '<div class="content">' + formatContentHtml(m.content, m.mentions, state.employees, state.me ? state.me.id : null) + "</div>" : "") +
