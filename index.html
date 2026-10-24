@@ -661,6 +661,20 @@
     text-align:center; font-weight:800; letter-spacing:1.5px; font-size:1.02rem}
   .tf-nav{display:flex; gap:10px; margin-top:18px}
   .tf-nav .btn{flex:1}
+
+  /* ===== Phase 1 (24/10): tính năng mới phải dùng tốt trên mobile ngay từ
+     đầu — không redesign, chỉ sửa điểm nghẽn cảm ứng của đúng các bề mặt mới:
+     nút duyệt/từ chối/xác nhận đủ 44px để bấm bằng ngón tay (nút small mặc
+     định trên mobile chỉ 36px); lưới 6 ô thống kê hồ sơ xếp 3 cột cho khỏi
+     bóp chữ; checkbox mới không bị luật input width:100% kéo giãn. ===== */
+  @media (max-width:760px){
+    #approvalList .btn, .task-card [data-ack], #taskBody [data-ack],
+    #profileBody .btn, #decisionsLoadBtn{min-height:44px; padding:10px 14px}
+    .profile-stats{grid-template-columns:repeat(3,1fr)}
+    #approvalList input[type="checkbox"], #taskForm input[type="checkbox"],
+    #taskBody input[type="checkbox"]{width:22px; height:22px; flex:0 0 auto;
+      margin:0; vertical-align:middle; accent-color:var(--green)}
+  }
 </style>
 </head>
 <body>
