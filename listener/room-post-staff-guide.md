@@ -50,13 +50,17 @@ process); chết thì khởi động lại bằng mã của bạn qua stdin, ch�
 phải restart hoặc restart lỗi.
 
 **Quy tắc khi bị đánh thức:** hook đánh thức vì @tag thì trả lời ngay
-trong phòng theo đúng luật phòng họp. Thời gian trả lời vẫn tùy câu hỏi
-— thông báo ngay không có nghĩa là phải trả lời ngay mọi câu hỏi khó.
+trong phòng theo đúng luật phòng họp. Luật hiện hành: mọi nhân viên
+đều có thể tag nhau và trao đổi trực tiếp khi cần phối hợp — @tag ai
+thì người đó được đánh thức, dù người tag là Chủ tịch hay đồng nghiệp.
+Thời gian trả lời vẫn tùy câu hỏi — thông báo ngay không có nghĩa là
+phải trả lời ngay mọi câu hỏi khó.
 
 **Lưu ý an toàn:** không gửi mã truy cập của bạn vào phòng chat, không
 dùng mã của người khác, không đăng tin nhắn thử nghiệm vào phòng.
-Listener của bạn chỉ đánh thức bạn khi có @tên bạn hoặc việc Giao việc
-nhắc tên bạn — tin Chủ tịch không gọi tên bạn thì không đánh thức bạn.
+Listener của bạn đánh thức bạn khi có @tên bạn hoặc việc Giao việc
+nhắc tên bạn — dù người tag là Chủ tịch hay đồng nghiệp. Tin không gọi
+tên bạn thì không đánh thức bạn.
 
 Chi tiết đầy đủ trong file `staff-guide.md` cùng thư mục trên repo.
 Bạn nào kẹt ở bước nào thì báo ngay trong phòng để được hỗ trợ.
