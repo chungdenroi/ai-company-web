@@ -7,7 +7,7 @@
   var cfg = window.FIREBASE_CONFIG || {};
   var CONFIGURED = !!cfg.apiKey && cfg.apiKey !== "CHUA_CO";
 
-  var TASK_STATUSES = ["Chờ nhận", "Đang làm", "Chờ duyệt", "Hoàn thành"];
+  var TASK_STATUSES = ["Chờ nhận", "Đã nhận", "Đang làm", "Chờ duyệt", "Hoàn thành"];
   var MSG_KINDS = ["Trao đổi", "Giao việc", "Thông báo", "Cập nhật tiến độ", "Báo cáo kết quả"];
   var LEVELS = ["Giám đốc", "Phó giám đốc", "Trưởng phòng", "Trợ lý", "Nhân viên"];
   var PALETTE = ["#4f46e5", "#7c3aed", "#0ea5e9", "#059669", "#d97706", "#db2777", "#0891b2", "#65a30d", "#9333ea", "#ea580c"];
@@ -48,6 +48,23 @@
     highlightMsgId: null,  // id tin đang được làm nổi bật sau khi bấm từ chuông thông báo
     highlightTimer: null,
     security: null,        // dữ liệu doc settings/security (chỉ nạp cho tài khoản Giám đốc)
+    presence: {},        // Phase 4: presence/<employeeId> do set_work ghi
+    handledMap: {},      // Phase 4: id tin đã xử lý (chỉ lưu ở máy này)
+    messagesLoadedOnce: false,
+    notifiedIds: {},
+    chatChannel: "all",
+    chatThread: "",
+    chatKind: "",
+    chatNeedsOnly: false,
+    chatUrgentOnly: false,
+    chatUnhandledOnly: false,
+    kanbanCol: "all",
+    taskView: "board",
+    taskAssigneeFilter: "",
+    taskPrioFilter: "",
+    taskRoleFilter: "",
+    lastStreamError: null,
+    rulesVersion: "",
     unsub: []
   };
 
@@ -136,9 +153,17 @@
             "#" + hx(mix(r, 0, 0.28)) + hx(mix(g, 0, 0.28)) + hx(mix(b, 0, 0.28))];
   }
   function avatarHtml(e, sizeCls) {
-    var color = (e && e.color) || "#4f46e5";
+    /* Phase 4 — hiển thị avatar có sẵn (employees/{id}.avatar = {color, hair, img}).
+       CHỈ HIỂN THỊ: không có chức năng sửa avatar, không đụng Rules. Ảnh chỉ nhận
+       data URL ảnh (png/jpeg/gif/webp) để tránh chèn nội dung lạ qua trường img. */
+    var color = (e && e.avatar && typeof e.avatar.color === "string" && e.avatar.color.charAt(0) === "#")
+      ? e.avatar.color : ((e && e.color) || "#4f46e5");
     var name = e ? (e.name || "") : "?";
     var pair = pastelFor(color);
+    var img = e && e.avatar && isValidAvatarImg(e.avatar.img) ? e.avatar.img : null;
+    if (img) {
+      return '<span class="avatar ' + (sizeCls || "") + '"><img src="' + img + '" alt="' + esc(name) + '"></span>';
+    }
     return '<span class="avatar ' + (sizeCls || "") + '" style="background:' + pair[0] + ";color:" + pair[1] + '">' + esc(initial(name)) + '</span>';
   }
 
@@ -569,6 +594,8 @@
     $("appView").classList.remove("hidden");
     $("currentUserLabel").textContent = state.me.name + " — " + state.me.title;
     $("taskForm").classList.toggle("hidden", !canManage());
+    $("quickTaskForm").classList.toggle("hidden", !canManage());
+    applyRoleGating();
     $("empFormCard").classList.toggle("hidden", !isDirector());
     $("securityCard").classList.toggle("hidden", !isDirectorAccount());
     if (isDirectorAccount()) renderSecurityCard();
@@ -640,11 +667,18 @@
     stopListeners();
     state.unsub.push(
       db.collection("messages").orderBy("createdAt", "asc").onSnapshot(function (snap) {
+        var prevMsgIds = {};
+        state.messages.forEach(function (m) { prevMsgIds[m.id] = true; });
+        var firstMsgLoad = !state.messagesLoadedOnce;
+        state.messagesLoadedOnce = true;
         state.messages = snap.docs.map(function (d) {
           var o = d.data(); o.id = d.id; return o;
         });
         renderMessages();
         renderPinned();
+        if (!firstMsgLoad) maybeNotifyMentions(prevMsgIds);
+        refreshRoom3dBubbles(prevMsgIds);
+        renderRightRail();
         if (state.currentTab === "room") markRoomRead(); else { refreshUnreadBadge(); renderBell(); renderInbox(); }
       }, function (e) { console.warn("messages listener:", e); })
     );
@@ -661,6 +695,7 @@
         renderBell();
         renderInbox();
         renderTaskModalIfOpen();
+        refreshRoom3dBoard();
       }, function (e) { console.warn("tasks listener:", e); })
     );
     state.unsub.push(
@@ -675,7 +710,23 @@
         renderBell();
         renderInbox();
         renderSelfStatus();
+        applyRoleGating();
+        renderChatFilters();
       }, function (e) { console.warn("employees listener:", e); })
+    );
+    state.unsub.push(
+      db.collection("presence").onSnapshot(function (snap) {
+        var map = {};
+        snap.docs.forEach(function (d) { map[d.id] = d.data(); });
+        state.presence = map;
+        renderHealth();
+        renderRightRail();
+        refreshRoom3dPeople();
+      }, function (e) {
+        state.lastStreamError = { code: e.code || "", message: e.message || "" };
+        renderHealth();
+        console.warn("presence listener:", e);
+      })
     );
     state.unsub.push(
       db.collection("activities").orderBy("createdAt", "desc").limit(12).onSnapshot(function (snap) {
@@ -702,6 +753,10 @@
         state.ackTimeoutHours = anext;
         var ainput = $("ackTimeoutInput");
         if (ainput && document.activeElement !== ainput) ainput.value = String(anext);
+        /* Phase 4 — phiên bản quy tắc (nếu có) để hiển thị ở Cài đặt. */
+        state.rulesVersion = d.rulesVersion ? String(d.rulesVersion) : "";
+        var rv = $("rulesVersionText");
+        if (rv) rv.textContent = state.rulesVersion || "chưa có dữ liệu";
         if (changed && state.user) {
           startCheckin();
           renderOverview();
@@ -791,9 +846,10 @@
   }
 
   /* ---------- Tabs ---------- */
-  var TABS = ["overview", "org", "room", "tasks", "inbox", "employees", "settings"];
+  var TABS = ["overview", "org", "room", "tasks", "inbox", "employees", "settings", "duyet", "3d", "log"];
   function switchTab(name) {
     if (name === "more") { toggleMoreMenu(); return; }
+    var prevTab = state.currentTab;
     state.currentTab = name;
     var tabs = document.querySelectorAll("#tabBar .tab");
     tabs.forEach(function (t) { t.classList.toggle("active", t.getAttribute("data-tab") === name); });
@@ -801,6 +857,8 @@
       $("tab-" + k).classList.toggle("hidden", k !== name);
     });
     closeMoreMenu();
+    if (prevTab === "3d" && name !== "3d") stop3dLoop();
+    closeSearchPanel();
     var moreBtn = document.querySelector("#tabBar .tab-more");
     if (moreBtn) moreBtn.classList.toggle("active", ["org", "employees", "settings"].indexOf(name) !== -1);
     if (name === "room") {
@@ -809,6 +867,9 @@
     } else {
       closeMentionBox();
       if (name === "inbox") renderInbox();
+      if (name === "duyet") renderApproval();
+      if (name === "3d") init3d();
+      if (name === "log" && !state.decisionsLoaded) loadDecisions();
     }
   }
 
@@ -1120,11 +1181,19 @@
   function renderMessages() {
     var box = $("messageList");
     if (!box) return;
+    renderChatFilters();
+    var msgList = chatFilteredMessages();
     if (!state.messages.length) {
       box.innerHTML = '<p class="hint" style="text-align:center">Chưa có tin nhắn nào. Hãy gửi tin đầu tiên.</p>';
+      var ci0 = $("chatFilterInfo");
+      if (ci0) ci0.textContent = "";
       return;
     }
-    box.innerHTML = state.messages.map(function (m) {
+    if (!msgList.length) {
+      box.innerHTML = '<p class="hint" style="text-align:center">Không có tin nào khớp bộ lọc hiện tại.</p>';
+      return;
+    }
+    box.innerHTML = msgList.map(function (m) {
       var sender = empOfSender(m.senderId);
       var colorEmp = sender || { name: m.senderName || "?", color: "#4f46e5" };
       var cls = "msg" + (m.kind === "Giao việc" ? " is-task" : "") + (m.kind === "Thông báo" ? " is-notice" : "") +
@@ -1142,17 +1211,21 @@
             (m.senderTitle ? '<span class="title">' + esc(m.senderTitle) + "</span>" : "") +
             '<span class="' + kindClass(m.kind) + '">' + esc(m.kind || "Trao đổi") + "</span>" +
             (m.pinned ? '<span class="chip" style="background:#eef1f4;color:#374151">Đã ghim</span>' : "") +
+            (m.needsReply ? '<span class="chip chip-need">Cần trả lời</span>' : "") +
+            (m.priority === "khẩn" ? '<span class="chip chip-urgent">Khẩn</span>' : "") +
             '<span class="time">' + esc(fmtTime(m.createdAt)) + "</span>" +
           "</div>" +
           (m.content ? '<div class="content">' + formatContentHtml(m.content, m.mentions, state.employees, state.me ? state.me.id : null) + "</div>" : "") +
           attachmentsHtml(m) +
           (m.linkedTaskTitle ? '<span class="linked-task">Đã tạo việc: ' + esc(m.linkedTaskTitle) + "</span>" : "") +
           pinRow +
+          handledActionHtml(m) +
         "</div>" +
       "</div>";
     }).join("");
     hydrateImages();
     scrollMessagesBottom();
+    updateChatFilterInfo(msgList.length);
   }
 
   function scrollMessagesBottom() {
@@ -1330,6 +1403,8 @@
         attachments: atts,
         pinned: false
       };
+      if ($("msgNeedsReply") && $("msgNeedsReply").checked) msg.needsReply = true;
+      if ($("msgUrgent") && $("msgUrgent").checked) msg.priority = "khẩn";
       if (kind === "Giao việc") {
         var t = $("msgTaskTitle").value.trim();
         if (t) { msg.linkedTaskTitle = t; linkedTitle = t; }
@@ -1359,6 +1434,8 @@
       return extra;
     }).then(function () {
       $("messageInput").value = "";
+      if ($("msgNeedsReply")) $("msgNeedsReply").checked = false;
+      if ($("msgUrgent")) $("msgUrgent").checked = false;
       $("msgTaskTitle").value = "";
       state.pendingFiles = [];
       renderAttachList();
@@ -1550,6 +1627,12 @@
     } else if (state.taskFilter === "ackoverdue") {
       list = list.filter(isAckOverdue);
     }
+    /* Phase 4 — lọc nâng cao (kết hợp AND với lọc chính). Lưu ý: task chưa có
+       trường dự án (guide định nghĩa roleInJob); lọc thứ ba dùng trường role
+       thật ("Vai trò của job này") và được ghi nhãn đúng như vậy. */
+    if (state.taskAssigneeFilter) list = list.filter(function (t) { return t.assigneeId === state.taskAssigneeFilter; });
+    if (state.taskPrioFilter) list = list.filter(function (t) { return t.priority === state.taskPrioFilter; });
+    if (state.taskRoleFilter) list = list.filter(function (t) { return t.role === state.taskRoleFilter; });
     return list;
   }
   function commentCount(t) { return (t.comments || []).length; }
@@ -1558,7 +1641,7 @@
     var opts = state.employees.filter(function (e) { return !e.suspended; }).map(function (e) {
       return '<option value="' + esc(e.id) + '">' + esc(e.name) + (e.title ? " — " + esc(e.title) : "") + "</option>";
     }).join("");
-    ["taskAssignee", "msgTaskAssignee"].forEach(function (id) {
+    ["taskAssignee", "msgTaskAssignee", "quickTaskAssignee"].forEach(function (id) {
       var sel = $(id);
       if (!sel) return;
       var current = sel.value;
@@ -1598,19 +1681,21 @@
 
   /* Xác nhận nhận việc — bước bắt buộc của người được giao khi việc còn ở
      "Đã gửi — chưa xác nhận". Không đi qua setTaskStatus để không bị lẫn
-     với đổi trạng thái thường, nhưng vẫn ghi lịch sử + activity. */
+     với đổi trạng thái thường, nhưng vẫn ghi lịch sử + activity.
+     Phase 4: ack chuyển sang "Đã nhận" (cột Kanban thứ 5 theo guide); assignee
+     chuyển tiếp sang "Đang làm" khi bắt đầu làm. */
   function acknowledgeTask(t) {
     if (!db || !state.me || !t || state.me.id !== t.assigneeId) return;
     var ev = {
       actorId: state.me.id,
       actorName: state.me.name,
       from: "Chờ nhận",
-      to: "Đang làm",
+      to: "Đã nhận",
       note: "Đã xác nhận nhận việc",
       at: firebase.firestore.Timestamp.now()
     };
     db.collection("tasks").doc(t.id).update({
-      status: "Đang làm", updatedAt: serverTimestamp(),
+      status: "Đã nhận", updatedAt: serverTimestamp(),
       history: firebase.firestore.FieldValue.arrayUnion(ev)
     }).then(function () {
       logActivity("đã xác nhận nhận việc “" + (t.title || "") + "”", "task");
@@ -1646,7 +1731,7 @@
     var html = "";
     TASK_STATUSES.forEach(function (status) {
       var col = list.filter(function (t) { return t.status === status; });
-      html += '<div class="board-col"><h3>' + esc(statusText(status)) +
+      html += '<div class="board-col" data-col="' + esc(status) + '"><h3>' + esc(statusText(status)) +
         ' <span class="chip count">' + col.length + "</span></h3>";
       if (!col.length) html += '<p class="col-empty">Không có việc nào.</p>';
       col.forEach(function (t) {
@@ -1654,7 +1739,7 @@
           return '<option value="' + esc(s) + '"' + (s === t.status ? " selected" : "") + ">" + esc(statusText(s)) + "</option>";
         }).join("");
         var needsAck = !!(state.me && state.me.id === t.assigneeId && t.status === "Chờ nhận");
-        html += '<div class="task-card' + (isOverdue(t) ? " overdue" : "") + '" data-task-id="' + esc(t.id) + '">' +
+        html += '<div class="task-card' + (isOverdue(t) ? " overdue" : "") + '" data-task-id="' + esc(t.id) + '" draggable="true">' +
           '<div class="t-title">' + esc(t.title || "") + "</div>" +
           (t.description ? '<div class="t-desc">' + esc(t.description) + "</div>" : "") +
           '<div class="t-tags"><span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" +
@@ -1698,6 +1783,18 @@
       });
     });
     renderBoardDots();
+    renderKanbanChips();
+    applyKanbanColFilter();
+    renderTaskAdvFilters();
+    if (state.taskView === "tree") {
+      board.classList.add("hidden");
+      renderTaskTree();
+    } else {
+      board.classList.remove("hidden");
+      var tt = $("taskTree");
+      if (tt) tt.classList.add("hidden");
+    }
+    wireKanbanDrag(board);
   }
 
   function dateInputToTimestamp(val) {
@@ -1921,6 +2018,8 @@
     $("statActive").textContent = String(active);
     $("statDoing").textContent = String(doing);
     $("statDone").textContent = String(done);
+    renderHighlightCards();
+    renderTaskStatusCounts();
 
     /* Phase 2 — banner cảnh báo quá hạn xác nhận (chỉ quản lý thấy, chỉ hiện
        khi có việc thật quá hạn; số liệu từ dữ liệu thật, không bịa). */
@@ -1937,10 +2036,11 @@
     }
 
     var grid = $("overviewGrid");
-    if (!state.employees.length) {
+    var overviewEmps = state.employees.filter(function (e) { return e.level !== "Giám đốc"; });
+    if (!overviewEmps.length) {
       grid.innerHTML = '<p class="hint">Chưa có hồ sơ nhân viên nào.</p>';
     } else {
-      grid.innerHTML = state.employees.map(function (e) {
+      grid.innerHTML = overviewEmps.map(function (e) {
         var p = presenceOf(e);
         return '<div class="emp-card clickable" data-profile="' + esc(e.id) + '">' +
           '<div class="e-head">' + avatarHtml(e) +
@@ -1953,13 +2053,23 @@
             (e.role ? '<span class="chip role">' + esc(e.role) + "</span>" : "") +
             (e.suspended ? '<span class="chip susp">Tạm ngưng</span>' : checkChipHtml(e)) +
           "</div>" +
-          '<div class="e-work">Đang làm: ' + esc(e.currentWork || "—") + "</div>" +
+          (function () {
+            var pr = presOf(e.id);
+            var wk = (pr && pr.currentWork) || e.currentWork || "—";
+            var pct = pr ? presProgressPct(pr) : null;
+            var h = '<div class="e-work">Đang làm: ' + esc(wk) + "</div>";
+            if (pct !== null) h += '<div class="pbar"><div style="width:' + pct + '%"></div></div>';
+            if (pr && pr.blocker) h += '<div class="e-blocker">Kẹt: ' + esc(pr.blocker) + "</div>";
+            return h;
+          })() +
           '<div class="e-foot"><span>Việc đang mở: <b>' + openTasksOf(e.id) + "</b></span>" +
             "<span>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</span></div>" +
         "</div>";
       }).join("");
     }
     renderPresence();
+    renderHealth();
+    renderRightRail();
   }
 
   /* Dải hiện diện ngang: avatar + chấm trạng thái + tên + trạng thái + việc đang làm,
@@ -1985,7 +2095,7 @@
         '<div class="pstrip-name">' + esc(e.name || "") + "</div>" +
         '<div class="pstrip-state' + (p.online ? " on" : "") + '">' + esc(p.label) + "</div>" +
         (p.sub ? '<div class="pstrip-sub">' + esc(p.sub) + "</div>" : "") +
-        '<div class="pstrip-work">' + esc(e.currentWork || "—") + "</div>" +
+        (function () { var pr = presOf(e.id); return '<div class="pstrip-work">' + esc((pr && pr.currentWork) || e.currentWork || "—") + "</div>"; })() +
       "</div>";
     }).join("");
   }
@@ -2083,8 +2193,12 @@
     if (!canApprove()) {
       sec.classList.add("hidden");
       box.innerHTML = "";
+      var dh0 = $("duyetStaffHint");
+      if (dh0) dh0.classList.remove("hidden");
       return;
     }
+    var dh = $("duyetStaffHint");
+    if (dh) dh.classList.add("hidden");
     var list = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
     /* Phase 2 — inbox bền vững: quản lý luôn thấy hộp duyệt (kể cả khi hàng
        chờ rỗng) + hồ sơ đã quyết tải từ collection approvals. */
@@ -2265,20 +2379,9 @@
       if (st) st.textContent = state.decisionsLoaded ? "Đã tải: 0 quyết định." : "";
       return;
     }
-    box.innerHTML = state.decisions.map(function (d) {
-      /* Tương thích ngược với bản ghi v1 (chưa có evidence/verification). */
-      var ver = d.verification || (d.action === "Duyệt" || d.action === "Trả lại" ? "đã xác nhận" : "agent báo cáo");
-      var verBy = d.verifiedBy || (ver === "đã xác nhận" ? (d.actorName || "") : "");
-      return '<div class="activity-item"><span class="a-actor">' + esc(d.actorName || "") + "</span>" +
-        "<span>" + esc(decisionActionText(d.action)) + " việc “" + esc(d.targetTitle || "") + "”" +
-        (d.assigneeName ? " (phụ trách: " + esc(d.assigneeName) + ")" : "") +
-        " — lý do: " + esc(d.reason ? d.reason : "không ghi lý do") +
-        " — bằng chứng: " + esc(d.evidence ? d.evidence : "không kèm bằng chứng") +
-        " — xác minh: " + esc(ver) + (verBy ? " bởi " + esc(verBy) : "") +
-        (d.approvalId ? " · kèm hồ sơ phê duyệt" : "") + "</span>" +
-        '<span class="a-time">' + esc(relText(d.createdAt)) + "</span></div>";
-    }).join("");
+    box.innerHTML = state.decisions.map(decisionItemHtml).join("");
     if (st) st.textContent = "Đã tải " + state.decisions.length + " quyết định mới nhất.";
+    renderDecisionsLog();
   }
   function loadDecisions() {
     if (!db || state.decisionsLoading) return;
@@ -2437,6 +2540,7 @@
   function renderEmployeesTab() {
     renderEmpTree();
     renderEmpAdmin();
+    renderEmpStatsGrid();
     fillManagerOptions();
   }
 
@@ -2667,10 +2771,11 @@
     /* Phase 1 — thống kê thật từ dữ liệu đã nạp, không số liệu giả: */
     var openTasks = myTasks.filter(function (t) { return t.status !== "Hoàn thành"; });
     var jobRoles = [];
-    openTasks.forEach(function (t) { if (t.role && jobRoles.indexOf(t.role) === -1) jobRoles.push(t.role); });
+    myTasks.forEach(function (t) { if (t.role && jobRoles.indexOf(t.role) === -1) jobRoles.push(t.role); });
     var reviewCount = myTasks.filter(function (t) { return t.status === "Chờ duyệt"; }).length;
     var unackedCount = myTasks.filter(function (t) { return t.status === "Chờ nhận"; }).length;
     var ackOverdueCount = myTasks.filter(isAckOverdue).length;
+    var avgAckMs = avgAckMsFor(e.id);
     var commentCount = 0;
     state.tasks.forEach(function (t) { (t.comments || []).forEach(function (c) { if (c.authorId === e.id) commentCount++; }); });
     var p = presenceOf(e);
@@ -2726,6 +2831,7 @@
         "<dt>Chi phí / chuyển đổi</dt><dd>chưa có dữ liệu</dd>" +
         "<dt>Hiện diện</dt><dd>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</dd>" +
         "<dt>Đang làm</dt><dd>" + esc(e.currentWork || "—") + "</dd>" +
+        "<dt>Độ trễ ack trung bình</dt><dd>" + (avgAckMs === null ? "chưa có dữ liệu" : ageText(avgAckMs)) + "</dd>" +
         "<dt>Cấp trên</dt><dd>" + (mgr
           ? '<button class="link-btn" type="button" data-profile="' + esc(mgr.id) + '">' + esc(mgr.name) + "</button>"
           : "— Cấp cao nhất") + "</dd>" +
@@ -3775,8 +3881,1244 @@
     if (pr) { openProfile(pr.getAttribute("data-profile")); return; }
   });
 
+  /* ================= PHASE 4 — Giao diện PRO (guide mục 6+7) =================
+     Mọi số liệu lấy từ state đã subscribe sẵn (messages, tasks, employees,
+     presence). Chỗ chưa có nguồn live thì hiển thị "chưa có dữ liệu", không
+     bịa số. Không thêm collection, không đổi schema tin/việc hiện có, trừ
+     2 trường cờ của guide (needsReply, priority "khẩn") chỉ ghi khi người
+     gửi tick chọn ở ô soạn tin. */
+
+  /* ---------- Presence (do set_work ghi; web chưa từng subscribe trước Phase 4) ---------- */
+  function presOf(id) { return (state.presence && state.presence[id]) || null; }
+  function presProgressPct(pr) {
+    if (!pr || pr.progress == null) return null;
+    var m = String(pr.progress).match(/(\d{1,3})\s*%/);
+    if (!m) return null;
+    var n = parseInt(m[1], 10);
+    if (isNaN(n) || n < 0 || n > 100) return null;
+    return n;
+  }
+  /* Trạng thái 3D/sức khoẻ từ presence. Guide mục 1: lastSeen quá 3 phút là ngoại tuyến.
+     Lưu ý: trường status do set_work ghi luôn là "Đang làm" nên không dùng để suy trạng thái. */
+  function presStateKind(pr) {
+    if (!pr) return { kind: "nodata", label: "chưa có dữ liệu" };
+    if (pr.blocker) return { kind: "blocked", label: "Kẹt: " + pr.blocker };
+    var ms = tsMillis(pr.lastSeen);
+    if (!ms || Date.now() - ms > 3 * 60 * 1000) return { kind: "offline", label: "Ngoại tuyến" };
+    if (pr.currentWork) return { kind: "working", label: pr.currentWork };
+    return { kind: "idle", label: "Chờ việc" };
+  }
+  function presAgeText(pr) {
+    var ms = pr ? tsMillis(pr.lastSeen) : null;
+    if (!ms) return "chưa có dữ liệu";
+    return fmtRel(pr.lastSeen) + " trước";
+  }
+
+  /* ---------- Avatar hiển thị (employees/{id}.avatar = {color, hair, img}; CHỈ HIỂN THỊ) ---------- */
+  function isValidAvatarImg(s) {
+    return typeof s === "string" && /^data:image\/(png|jpeg|jpg|gif|webp);base64,/.test(s);
+  }
+  function avatarColors(e) {
+    var shirt = (e && e.avatar && typeof e.avatar.color === "string" && e.avatar.color.charAt(0) === "#")
+      ? e.avatar.color : ((e && e.color) || "#4f46e5");
+    var hair = (e && e.avatar && typeof e.avatar.hair === "string" && /^#[0-9a-fA-F]{6}$/.test(e.avatar.hair))
+      ? e.avatar.hair : "#3b2a1a";
+    return { shirt: shirt, hair: hair };
+  }
+
+  /* ---------- Tin đã xử lý (lưu ở máy này, không ghi lên server) ---------- */
+  function loadHandledMap() {
+    try {
+      var arr = JSON.parse(localStorage.getItem("enteesee-handled-msgs") || "[]");
+      var map = {};
+      arr.forEach(function (id) { map[id] = true; });
+      state.handledMap = map;
+    } catch (e) { state.handledMap = {}; }
+  }
+  function saveHandledMap() {
+    try { localStorage.setItem("enteesee-handled-msgs", JSON.stringify(Object.keys(state.handledMap))); } catch (e) {}
+  }
+  function isHandledMsg(id) { return !!(state.handledMap && state.handledMap[id]); }
+  function toggleHandledMsg(id) {
+    if (!state.handledMap) state.handledMap = {};
+    if (state.handledMap[id]) delete state.handledMap[id]; else state.handledMap[id] = true;
+    saveHandledMap();
+    renderMessages();
+  }
+  function handledActionHtml(m) {
+    var me = state.me;
+    var mentionsMe = me && m.mentions && m.mentions.indexOf(me.id) >= 0;
+    var triage = mentionsMe || m.kind === "Giao việc" || m.kind === "Thông báo";
+    if (!triage) return "";
+    if (isHandledMsg(m.id)) {
+      return '<div class="msg-actions"><span class="chip">Đã xử lý</span>' +
+        '<button class="link-btn" type="button" data-handled-toggle="' + esc(m.id) + '">Bỏ đánh dấu</button></div>';
+    }
+    return '<div class="msg-actions"><button class="link-btn" type="button" data-handled-toggle="' +
+      esc(m.id) + '">✓ Đánh dấu đã xử lý</button></div>';
+  }
+
+  /* ---------- Thống kê nhân sự ---------- */
+  function avgAckMsFor(empId) {
+    var delays = [];
+    state.tasks.forEach(function (t) {
+      if (t.assigneeId !== empId) return;
+      var created = tsMillis(t.createdAt);
+      if (!created) return;
+      var evs = (t.history || []).filter(function (h) { return h.from === "Chờ nhận" && h.to === "Đang làm"; });
+      if (!evs.length) return;
+      var at = null, i;
+      for (i = 0; i < evs.length; i++) { var mm = tsMillis(evs[i].at); if (mm && (at === null || mm < at)) at = mm; }
+      if (at !== null && at >= created) delays.push(at - created);
+    });
+    if (!delays.length) return null;
+    var sum = 0, i;
+    for (i = 0; i < delays.length; i++) sum += delays[i];
+    return Math.round(sum / delays.length);
+  }
+  function empJobRoles(empId) {
+    var roles = [];
+    state.tasks.forEach(function (t) {
+      if (t.assigneeId === empId && t.role && roles.indexOf(t.role) === -1) roles.push(t.role);
+    });
+    return roles;
+  }
+
+  /* ---------- Tổng quan: thẻ nổi bật + số việc theo trạng thái ---------- */
+  function setTaskFilterUI(f) {
+    state.taskFilter = f;
+    document.querySelectorAll("#taskFilters .filter-btn").forEach(function (x) {
+      x.classList.toggle("active", x.getAttribute("data-filter") === f);
+    });
+    renderTasks();
+  }
+  function renderHighlightCards() {
+    var box = $("highlightCards");
+    if (!box) return;
+    var review = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; }).length;
+    var overdue = state.tasks.filter(isOverdue).length;
+    box.innerHTML =
+      '<button class="highlight-card' + (review ? " warn" : "") + '" type="button" data-highlight-goto="duyet">' +
+        '<span>Cần duyệt</span><span class="hc-num">' + review + " ›</span></button>" +
+      '<button class="highlight-card' + (overdue ? " warn" : "") + '" type="button" data-highlight-goto="overdue">' +
+        '<span>Việc quá hạn</span><span class="hc-num">' + overdue + " ›</span></button>";
+  }
+  function renderTaskStatusCounts() {
+    var box = $("taskStatusCounts");
+    if (!box) return;
+    var html = '<span class="chip count">Tổng: ' + state.tasks.length + "</span>";
+    TASK_STATUSES.forEach(function (st) {
+      var n = state.tasks.filter(function (t) { return t.status === st; }).length;
+      html += '<span class="chip">' + esc(st) + ": " + n + "</span>";
+    });
+    box.innerHTML = html;
+  }
+
+  /* ---------- Sức khoẻ hệ thống (presence.lastSeen; quota không có nguồn live) ---------- */
+  function renderHealth() {
+    var box = $("healthList"), note = $("healthNote");
+    if (!box) return;
+    var staff = state.employees.filter(function (e) { return e.level !== "Giám đốc" && !e.suspended; });
+    if (!staff.length) {
+      box.innerHTML = '<p class="hint">Chưa có nhân viên nào.</p>';
+    } else {
+      box.innerHTML = staff.map(function (e) {
+        var pr = presOf(e.id);
+        var st = presStateKind(pr);
+        var dotCls = st.kind === "working" ? "dot on" : (st.kind === "blocked" ? "dot late" : "dot off");
+        return '<div class="health-row">' + avatarHtml(e, "sm") +
+          '<div style="flex:1;min-width:0"><div><b>' + esc(e.name || "") + "</b> · " + esc(st.label) + "</div>" +
+          '<div class="hint">presence: ' + (pr ? esc(presAgeText(pr)) : "chưa có dữ liệu") +
+          (pr && pr.currentWork ? " · " + esc(pr.currentWork) : "") + "</div></div>" +
+          '<span class="' + dotCls + '"></span></div>';
+      }).join("");
+    }
+    if (note) {
+      var err = state.lastStreamError
+        ? "Lỗi stream gần nhất trong phiên này: " + esc(state.lastStreamError.code || "không rõ mã") +
+          (state.lastStreamError.code === "resource-exhausted" ? " (lỗi 429 — hết quota đọc)" : "") + ". "
+        : "Chưa ghi nhận lỗi stream trong phiên này. ";
+      note.textContent = err + "Quota Firestore hôm nay: chưa có dữ liệu (không đọc được từ web client; số liệu quota ghi trong decisions theo Pha 0).";
+    }
+  }
+
+  /* ---------- Cột phải desktop ---------- */
+  function renderRightRail() {
+    var ap = $("railApproval"), al = $("railAlerts"), cl = $("railChatList");
+    if (!ap && !al && !cl) return;
+    if (ap) {
+      var list = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
+      ap.innerHTML = "<p class=\"hint\">Hàng chờ: <b>" + list.length + "</b> mục.</p>" +
+        (list.length
+          ? list.slice(0, 5).map(function (t) {
+              return '<div class="rail-item" data-rail-goto="duyet"><div style="flex:1;min-width:0"><b>' +
+                esc(t.title || "") + "</b><div class=\"hint\">Phụ trách: " + esc(empName(t.assigneeId)) + "</div></div></div>";
+            }).join("")
+          : '<p class="hint">Không có mục chờ duyệt.</p>');
+    }
+    if (al) {
+      var html = "";
+      var ao = canManage() ? ackOverdueTasks() : state.tasks.filter(function (t) {
+        return state.me && t.assigneeId === state.me.id && t.status === "Chờ nhận";
+      });
+      if (ao.length) {
+        html += '<p class="hint">' + (canManage() ? "Quá hạn xác nhận" : "Việc của tôi chưa nhận") +
+          ": <b>" + ao.length + "</b></p>" +
+          ao.slice(0, 5).map(function (t) {
+            return '<div class="rail-item" data-rail-task="' + esc(t.id) + '"><div style="flex:1;min-width:0"><b>' +
+              esc(t.title || "") + "</b><div class=\"hint\">Phụ trách: " + esc(empName(t.assigneeId)) + "</div></div></div>";
+          }).join("");
+      }
+      var blocked = state.employees.filter(function (e) { var pr = presOf(e.id); return pr && pr.blocker; });
+      if (blocked.length) {
+        html += '<p class="hint">Đang kẹt: <b>' + blocked.length + "</b></p>" +
+          blocked.map(function (e) {
+            return '<div class="rail-item"><div style="flex:1;min-width:0"><b>' + esc(e.name || "") +
+              '</b><div class="hint">' + esc(presOf(e.id).blocker) + "</div></div></div>";
+          }).join("");
+      }
+      html += '<p class="hint">Quota hôm nay: chưa có dữ liệu.</p>';
+      if (!html) html = '<p class="hint">Không có cảnh báo.</p>';
+      al.innerHTML = html;
+    }
+    if (cl) {
+      var last = state.messages.slice(-3);
+      cl.innerHTML = last.length
+        ? last.map(function (m) {
+            return '<div class="rail-item" data-rail-msg="' + esc(m.id) + '"><div style="flex:1;min-width:0"><b>' +
+              esc(m.senderName || "") + '</b><div class="hint">' +
+              esc(String(m.content || "").slice(0, 60)) + "</div></div></div>";
+          }).join("")
+        : '<p class="hint">Chưa có tin nhắn nào.</p>';
+    }
+  }
+  function onRailChat(ev) {
+    ev.preventDefault();
+    if (!db || !state.me) return;
+    var input = $("railChatInput");
+    var content = input.value.trim();
+    if (!content) return;
+    db.collection("messages").add({
+      senderId: state.me.id, senderName: state.me.name, senderTitle: state.me.title,
+      content: content, kind: "Trao đổi", mentions: computeMentions(content, state.employees),
+      createdAt: serverTimestamp(), attachments: [], pinned: false
+    }).then(function () { input.value = ""; }).catch(function (e) { console.warn("rail chat:", e); });
+  }
+
+  /* ---------- Phòng chat: kênh / luồng / lọc kind / cần trả lời / khẩn ---------- */
+  function rebuildSelectPreserve(sel, items) {
+    if (!sel) return;
+    var cur = sel.value;
+    var html = items.map(function (it) {
+      return '<option value="' + esc(it.value) + '">' + esc(it.label) + "</option>";
+    }).join("");
+    sel.innerHTML = html;
+    var ok = items.some(function (it) { return it.value === cur; });
+    if (ok) sel.value = cur;
+  }
+  function renderChatFilters() {
+    var ch = $("chatChannelSel");
+    if (ch) {
+      var items = [{ value: "all", label: "Phòng chung" }];
+      state.employees.forEach(function (e) {
+        if (!e.suspended) items.push({ value: "dm:" + e.id, label: "DM: " + (e.name || "") });
+      });
+      rebuildSelectPreserve(ch, items);
+      ch.value = state.chatChannel;
+    }
+    var th = $("chatThreadSel");
+    if (th) {
+      var seen = {}, items2 = [{ value: "", label: "Mọi luồng việc" }];
+      state.messages.forEach(function (m) {
+        if (m.linkedTaskTitle && !seen[m.linkedTaskTitle]) { seen[m.linkedTaskTitle] = true; items2.push({ value: m.linkedTaskTitle, label: "Việc: " + m.linkedTaskTitle }); }
+      });
+      rebuildSelectPreserve(th, items2);
+      th.value = state.chatThread;
+    }
+    var kd = $("chatKindSel");
+    if (kd) {
+      var items3 = [{ value: "", label: "Mọi loại tin" }];
+      MSG_KINDS.forEach(function (k) { items3.push({ value: k, label: k }); });
+      rebuildSelectPreserve(kd, items3);
+      kd.value = state.chatKind;
+    }
+    var n = $("chatNeedsOnly"); if (n) n.checked = state.chatNeedsOnly;
+    var u = $("chatUrgentOnly"); if (u) u.checked = state.chatUrgentOnly;
+    var uh = $("chatUnhandledOnly"); if (uh) uh.checked = state.chatUnhandledOnly;
+  }
+  function chatFilteredMessages() {
+    var list = state.messages;
+    if (state.chatChannel && state.chatChannel !== "all" && state.chatChannel.indexOf("dm:") === 0) {
+      var pid = state.chatChannel.slice(3), me = state.me ? state.me.id : null;
+      list = list.filter(function (m) {
+        var mentions = m.mentions || [];
+        return (m.senderId === me && mentions.indexOf(pid) >= 0) ||
+          (m.senderId === pid && mentions.indexOf(me) >= 0);
+      });
+    }
+    if (state.chatThread) list = list.filter(function (m) { return m.linkedTaskTitle === state.chatThread; });
+    if (state.chatKind) list = list.filter(function (m) { return m.kind === state.chatKind; });
+    if (state.chatNeedsOnly) list = list.filter(function (m) { return m.needsReply === true; });
+    if (state.chatUrgentOnly) list = list.filter(function (m) { return m.priority === "khẩn"; });
+    if (state.chatUnhandledOnly) list = list.filter(function (m) { return !isHandledMsg(m.id); });
+    return list;
+  }
+  function updateChatFilterInfo(shown) {
+    var info = $("chatFilterInfo");
+    if (!info) return;
+    var active = state.chatChannel !== "all" || !!state.chatThread || !!state.chatKind ||
+      state.chatNeedsOnly || state.chatUrgentOnly || state.chatUnhandledOnly;
+    info.textContent = active ? ("Đang hiển thị " + shown + " / " + state.messages.length + " tin (lọc).") : "";
+  }
+
+  /* ---------- Việc: Kanban chip cột + kéo thả + cây cha-con ---------- */
+  function renderKanbanChips() {
+    var box = $("kanbanCols");
+    if (!box) return;
+    var html = '<button class="kchip' + (state.kanbanCol === "all" ? " active" : "") + '" type="button" data-kcol="all">Tất cả các cột</button>';
+    TASK_STATUSES.forEach(function (st) {
+      var n = state.tasks.filter(function (t) { return t.status === st; }).length;
+      html += '<button class="kchip' + (state.kanbanCol === st ? " active" : "") + '" type="button" data-kcol="' +
+        esc(st) + '">' + esc(st) + " (" + n + ")</button>";
+    });
+    box.innerHTML = html;
+  }
+  function applyKanbanColFilter() {
+    var board = $("taskBoard");
+    if (!board) return;
+    if (state.kanbanCol === "all") {
+      board.querySelectorAll(".board-col").forEach(function (c) { c.classList.remove("hidden"); });
+      return;
+    }
+    board.querySelectorAll(".board-col").forEach(function (c) {
+      c.classList.toggle("hidden", c.getAttribute("data-col") !== state.kanbanCol);
+    });
+  }
+  function setKanbanCol(col) {
+    state.kanbanCol = col;
+    renderKanbanChips();
+    applyKanbanColFilter();
+  }
+  function setTaskView(view) {
+    state.taskView = view;
+    var b = $("taskViewBoardBtn"), t = $("taskViewTreeBtn");
+    if (b) b.classList.toggle("primary", view === "board");
+    if (t) t.classList.toggle("primary", view === "tree");
+    renderTasks();
+  }
+  function renderTaskTree() {
+    var box = $("taskTree");
+    if (!box) return;
+    var list = visibleTasks();
+    var ids = {};
+    list.forEach(function (t) { ids[t.id] = true; });
+    var hasLink = list.some(function (t) { return t.parentTaskId; });
+    if (!hasLink) {
+      box.innerHTML = "<p class=\"hint\">Chưa có việc cha-con nào. Việc chia nhỏ cần ghi parentTaskId (theo guide mục 5) thì cây mới hiện ở đây.</p>";
+      return;
+    }
+    var kids = {};
+    list.forEach(function (t) {
+      var p = t.parentTaskId;
+      if (p && ids[p]) {
+        if (!kids[p]) kids[p] = [];
+        kids[p].push(t);
+      }
+    });
+    var roots = list.filter(function (t) { return !t.parentTaskId || !ids[t.parentTaskId]; });
+    function nodeHtml(t, depth, seen) {
+      var h = '<div class="tree-node"><div><b>' + esc(t.title || "") + "</b> " +
+        '<span class="' + statusChipClass(t.status) + '">' + esc(statusText(t.status)) + "</span> " +
+        '<span class="hint">Phụ trách: ' + esc(empName(t.assigneeId)) + "</span> " +
+        '<button class="link-btn" type="button" data-taskopen="' + esc(t.id) + '">Mở việc</button></div>';
+      var ch = kids[t.id] || [];
+      if (ch.length && depth < 5 && !seen[t.id]) {
+        var next = {};
+        Object.keys(seen).forEach(function (k) { next[k] = true; });
+        next[t.id] = true;
+        h += '<div class="tree-kids">' + ch.map(function (c) { return nodeHtml(c, depth + 1, next); }).join("") + "</div>";
+      }
+      return h + "</div>";
+    }
+    box.innerHTML = roots.map(function (t) { return nodeHtml(t, 0, {}); }).join("") ||
+      "<p class=\"hint\">Không có việc nào khớp bộ lọc.</p>";
+  }
+  function renderTaskAdvFilters() {
+    var as = $("taskAssigneeFilter");
+    if (as) {
+      var items = [{ value: "", label: "Mọi người phụ trách" }];
+      state.employees.forEach(function (e) {
+        if (!e.suspended) items.push({ value: e.id, label: e.name || "" });
+      });
+      rebuildSelectPreserve(as, items);
+      as.value = state.taskAssigneeFilter;
+    }
+    var rs = $("taskRoleFilter");
+    if (rs) {
+      var seen = {}, items2 = [{ value: "", label: "Mọi vai trò job" }];
+      state.tasks.forEach(function (t) {
+        if (t.role && !seen[t.role]) { seen[t.role] = true; items2.push({ value: t.role, label: t.role }); }
+      });
+      rebuildSelectPreserve(rs, items2);
+      rs.value = state.taskRoleFilter;
+    }
+  }
+  function wireKanbanDrag(board) {
+    if (!board) return;
+    board.querySelectorAll(".board-col").forEach(function (col) {
+      col.addEventListener("dragover", function (ev) { ev.preventDefault(); col.classList.add("drop-target"); });
+      col.addEventListener("dragleave", function () { col.classList.remove("drop-target"); });
+      col.addEventListener("drop", function (ev) {
+        ev.preventDefault();
+        col.classList.remove("drop-target");
+        var id = ev.dataTransfer.getData("text/plain");
+        var status = col.getAttribute("data-col");
+        if (!id || !status) return;
+        var t = findTask(id);
+        if (!t || t.status === status) return;
+        setTaskStatus(t, status, { historyNote: "Kéo thả Kanban" });
+      });
+    });
+    board.querySelectorAll(".task-card").forEach(function (card) {
+      card.addEventListener("dragstart", function (ev) {
+        if (ev.target && ev.target.closest && ev.target.closest("select,textarea,input,button,a")) {
+          ev.preventDefault();
+          return;
+        }
+        ev.dataTransfer.setData("text/plain", card.getAttribute("data-task-id") || "");
+        card.classList.add("dragging");
+      });
+      card.addEventListener("dragend", function () { card.classList.remove("dragging"); });
+    });
+  }
+
+  /* ---------- Nhật ký quyết định: mẫu tin + pane tìm kiếm ---------- */
+  function decisionItemHtml(d) {
+    /* Tương thích ngược với bản ghi v1 (chưa có evidence/verification). */
+    var ver = d.verification || (d.action === "Duyệt" || d.action === "Trả lại" ? "đã xác nhận" : "agent báo cáo");
+    var verBy = d.verifiedBy || (ver === "đã xác nhận" ? (d.actorName || "") : "");
+    return '<div class="activity-item"><span class="a-actor">' + esc(d.actorName || "") + "</span>" +
+      "<span>" + esc(decisionActionText(d.action)) + " việc “" + esc(d.targetTitle || "") + "”" +
+      (d.assigneeName ? " (phụ trách: " + esc(d.assigneeName) + ")" : "") +
+      " — lý do: " + esc(d.reason ? d.reason : "không ghi lý do") +
+      " — bằng chứng: " + esc(d.evidence ? d.evidence : "không kèm bằng chứng") +
+      " — xác minh: " + esc(ver) + (verBy ? " bởi " + esc(verBy) : "") +
+      (d.approvalId ? " · kèm hồ sơ phê duyệt" : "") + "</span>" +
+      '<span class="a-time">' + esc(relText(d.createdAt)) + "</span></div>";
+  }
+  function foldStr(s) {
+    return String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/đ/g, "d").replace(/Đ/g, "d").toLowerCase();
+  }
+  function renderDecisionsLog() {
+    var box = $("decisionsListLog"), st = $("logStatus");
+    if (!box) return;
+    var q = foldStr(($("logSearchInput") ? $("logSearchInput").value : "").trim());
+    var list = state.decisions;
+    if (q) {
+      list = list.filter(function (d) {
+        var hay = foldStr([d.action, d.targetTitle, d.assigneeName, d.reason, d.evidence, d.actorName].join(" "));
+        return hay.indexOf(q) >= 0;
+      });
+    }
+    if (!state.decisionsLoaded) {
+      box.innerHTML = '<p class="hint">Chưa tải nhật ký. Bấm “Tải nhật ký”.</p>';
+    } else if (!list.length) {
+      box.innerHTML = '<p class="hint">' + (q ? "Không khớp tìm kiếm." : "Chưa có quyết định nào được ghi nhận.") + "</p>";
+    } else {
+      box.innerHTML = list.map(decisionItemHtml).join("");
+    }
+    if (st) {
+      st.textContent = state.decisionsLoaded
+        ? ("Đã tải " + state.decisions.length + " quyết định mới nhất." + (q ? " Khớp tìm kiếm: " + list.length + "." : ""))
+        : "";
+    }
+  }
+  function exportDecisionsLog() {
+    var st = $("logStatus");
+    if (!state.decisionsLoaded || !state.decisions.length) {
+      if (st) st.textContent = "Hãy tải nhật ký trước khi xuất.";
+      return;
+    }
+    var blob = new Blob([JSON.stringify(state.decisions, null, 2)], { type: "application/json" });
+    var a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "nhat-ky-quyet-dinh.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  }
+
+  /* ---------- Nhân sự: lưới thống kê ---------- */
+  function renderEmpStatsGrid() {
+    var box = $("empStatsGrid");
+    if (!box) return;
+    var list = state.employees.filter(function (e) { return !e.suspended; });
+    if (!list.length) {
+      box.innerHTML = '<p class="hint">Chưa có nhân viên nào.</p>';
+      return;
+    }
+    box.innerHTML = list.map(function (e) {
+      var my = state.tasks.filter(function (t) { return t.assigneeId === e.id; });
+      var open = my.filter(function (t) { return t.status !== "Hoàn thành"; }).length;
+      var done = my.filter(function (t) { return t.status === "Hoàn thành"; }).length;
+      var avg = avgAckMsFor(e.id);
+      var roles = empJobRoles(e.id);
+      return '<div class="health-row">' + avatarHtml(e, "sm") +
+        '<div style="flex:1;min-width:0"><div><b>' + esc(e.name || "") + "</b> · " + esc(e.title || "") + "</div>" +
+        '<div class="hint">Đang mở: <b>' + open + "</b> · Hoàn thành: <b>" + done + "</b> · " +
+        "Độ trễ ack trung bình: <b>" + (avg === null ? "chưa có dữ liệu" : esc(ageText(avg))) + "</b>" +
+        (roles.length ? " · Vai trò job: " + roles.map(function (r) { return esc(r); }).join(", ") : "") + "</div></div></div>";
+    }).join("");
+  }
+
+  /* ---------- Tìm kiếm toàn cục (phím /) ---------- */
+  function renderSearchResults() {
+    var input = $("globalSearch"), panel = $("globalSearchPanel");
+    if (!input || !panel) return;
+    var q = input.value.trim();
+    if (!q) { panel.classList.add("hidden"); panel.innerHTML = ""; return; }
+    var fq = foldStr(q);
+    var html = "";
+    function groupHtml(title, items, type) {
+      if (!items.length) return "";
+      var h = '<div class="search-group">' + title + "</div>";
+      h += items.map(function (it) {
+        return '<button class="search-item" type="button" data-search-type="' + type + '" data-search-id="' + esc(it.id) + '">' +
+          '<span class="s-title">' + esc(it.title) + '</span><span class="s-sub">' + esc(it.sub || "") + "</span></button>";
+      }).join("");
+      return h;
+    }
+    var tasks = state.tasks.filter(function (t) {
+      return foldStr((t.title || "") + " " + (t.description || "")).indexOf(fq) >= 0;
+    }).slice(0, 5).map(function (t) {
+      return { id: t.id, title: t.title || "", sub: esc(statusText(t.status)) + " · " + empName(t.assigneeId) };
+    });
+    var msgs = state.messages.slice().reverse().filter(function (m) {
+      return foldStr((m.content || "") + " " + (m.senderName || "")).indexOf(fq) >= 0;
+    }).slice(0, 5).map(function (m) {
+      return { id: m.id, title: (m.senderName || "") + ": " + String(m.content || "").slice(0, 50), sub: m.kind || "" };
+    });
+    var emps = state.employees.filter(function (e) {
+      return foldStr((e.name || "") + " " + (e.title || "") + " " + (e.role || "")).indexOf(fq) >= 0;
+    }).slice(0, 5).map(function (e) {
+      return { id: e.id, title: e.name || "", sub: e.title || "" };
+    });
+    var decs = state.decisionsLoaded ? state.decisions.filter(function (d) {
+      return foldStr([d.action, d.targetTitle, d.assigneeName, d.reason, d.actorName].join(" ")).indexOf(fq) >= 0;
+    }).slice(0, 3).map(function (d) {
+      return { id: d.id, title: (d.action || "") + " việc “" + (d.targetTitle || "") + "”", sub: d.actorName || "" };
+    }) : [];
+    html += groupHtml("Công việc", tasks, "task");
+    html += groupHtml("Tin nhắn", msgs, "msg");
+    html += groupHtml("Nhân sự", emps, "emp");
+    html += groupHtml("Quyết định (đã tải)", decs, "dec");
+    if (!html) html = '<p class="hint" style="padding:10px">Không tìm thấy kết quả.</p>';
+    panel.innerHTML = html;
+    panel.classList.remove("hidden");
+  }
+  function closeSearchPanel() {
+    var panel = $("globalSearchPanel");
+    if (panel) { panel.classList.add("hidden"); panel.innerHTML = ""; }
+  }
+
+  /* ---------- Giao diện + thông báo + phân quyền menu 3D ---------- */
+  function applyTheme(v) {
+    if (v === "dark") document.documentElement.setAttribute("data-theme", "dark");
+    else document.documentElement.removeAttribute("data-theme");
+    var sel = $("themeSelect");
+    if (sel) sel.value = v === "dark" ? "dark" : "light";
+  }
+  function setTheme(v) {
+    try { localStorage.setItem("enteesee-theme", v === "dark" ? "dark" : "light"); } catch (e) {}
+    applyTheme(v);
+  }
+  function applyRoleGating() {
+    var show = isDirector();
+    document.querySelectorAll('[data-tab="3d"]').forEach(function (b) { b.classList.toggle("hidden", !show); });
+    document.querySelectorAll('#moreMenu [data-more-goto="3d"]').forEach(function (b) { b.classList.toggle("hidden", !show); });
+  }
+
+  /* ---------- Giao việc nhanh + chat nhanh cột phải ---------- */
+  function onQuickTask(ev) {
+    ev.preventDefault();
+    if (!canManage() || !db) return;
+    var errBox = $("quickTaskError");
+    errBox.classList.add("hidden");
+    var title = $("quickTaskTitle").value.trim();
+    var assignee = $("quickTaskAssignee").value;
+    if (!title) return;
+    if (!assignee) {
+      errBox.textContent = "Chưa có nhân viên nào để giao việc. Hãy đăng ký hồ sơ nhân viên trước.";
+      errBox.classList.remove("hidden");
+      return;
+    }
+    db.collection("tasks").add({
+      title: title, description: "", assigneeId: assignee, assignerId: state.me.id,
+      status: "Chờ nhận", priority: "Trung bình", role: "", sensitive: false,
+      resultNote: "", dueAt: null, comments: [],
+      createdAt: serverTimestamp(), updatedAt: serverTimestamp()
+    }).then(function () {
+      $("quickTaskTitle").value = "";
+      logActivity("đã giao việc nhanh “" + title + "” cho " + empName(assignee), "task");
+    }).catch(function (e) {
+      errBox.textContent = "Tạo công việc thất bại. Vui lòng thử lại.";
+      errBox.classList.remove("hidden");
+      console.warn("quick task:", e);
+    });
+  }
+
+  /* ---------- Thông báo nhắc tên (chỉ khi tab ẩn + đã bật trong Cài đặt) ---------- */
+  function maybeNotifyMentions(prevIds) {
+    try {
+      if (!("Notification" in window)) return;
+      if (localStorage.getItem("enteesee-notify") !== "1") return;
+      if (Notification.permission !== "granted") return;
+      if (!document.hidden || !state.me) return;
+      state.messages.forEach(function (m) {
+        if (prevIds[m.id] || state.notifiedIds[m.id]) return;
+        if (m.mentions && m.mentions.indexOf(state.me.id) >= 0) {
+          state.notifiedIds[m.id] = true;
+          new Notification("Nhắc tên trong phòng họp", {
+            body: (m.senderName || "") + ": " + String(m.content || "").slice(0, 100)
+          });
+        }
+      });
+    } catch (e) { /* thông báo là tính năng phụ, lỗi thì bỏ qua */ }
+  }
+
+  /* ================= PHÒNG 3D (guide mục 8) =================
+     - three.js 0.160.0 (UMD) từ cdnjs, nạp lười chỉ khi Chủ tịch mở tab Phòng 3D.
+     - Khối đơn giản (hộp, trụ, cầu), không đổ bóng, giới hạn 30fps, tôn trọng
+       prefers-reduced-motion (không chạy vòng lặp, chỉ vẽ lại khi dữ liệu đổi).
+     - Dữ liệu: state.presence / state.employees / state.tasks / state.messages đã
+       subscribe sẵn — phòng 3D không thêm lượt đọc nào. */
+  var THREE_CDN = "https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js";
+  var R3D = {
+    built: false, loading: false, mode: "3d", selectedId: null, peopleIds: "",
+    seenMsgIds: {}, bubbleTimers: {}, people: [], deskParts: [],
+    boardGroup: null, boardMats: null, tileGeo: null, selectionRing: null,
+    renderer: null, scene: null, camera: null, raf: 0, lastFrame: 0,
+    reduced: !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+  };
+  function room3dAiStaff() {
+    var list = state.employees.filter(function (e) { return e.level !== "Giám đốc" && !e.suspended; });
+    list.sort(function (a, b) {
+      var ca = a.level === "Phó giám đốc" ? 0 : 1, cb = b.level === "Phó giám đốc" ? 0 : 1;
+      return ca - cb;
+    });
+    return list;
+  }
+  function makeTextSprite(text) {
+    var canvas = document.createElement("canvas");
+    canvas.width = 256; canvas.height = 64;
+    var ctx = canvas.getContext("2d");
+    ctx.fillStyle = "rgba(17,24,39,0.85)";
+    if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(8, 8, 240, 48, 12); ctx.fill(); }
+    else ctx.fillRect(8, 8, 240, 48);
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "bold 24px sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    var t = String(text || "");
+    if (t.length > 14) t = t.slice(0, 13) + "…";
+    ctx.fillText(t, 128, 32);
+    var tex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    var sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sprite.scale.set(2.8, 0.7, 1);
+    return sprite;
+  }
+  function makeBubbleSprite() {
+    var canvas = document.createElement("canvas");
+    canvas.width = 256; canvas.height = 96;
+    var tex = new THREE.CanvasTexture(canvas);
+    if (THREE.SRGBColorSpace) tex.colorSpace = THREE.SRGBColorSpace;
+    var sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false }));
+    sprite.scale.set(3.2, 1.2, 1);
+    function setText(text) {
+      var ctx = canvas.getContext("2d");
+      ctx.clearRect(0, 0, 256, 96);
+      ctx.fillStyle = "rgba(255,255,255,0.95)";
+      ctx.fillRect(4, 4, 248, 88);
+      ctx.fillStyle = "#111827";
+      ctx.font = "bold 20px sans-serif";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      var t = String(text || "");
+      if (t.length > 28) t = t.slice(0, 27) + "…";
+      ctx.fillText(t, 128, 48);
+      tex.needsUpdate = true;
+    }
+    setText("");
+    return { sprite: sprite, setText: setText };
+  }
+  function makeRoom3dPerson(e) {
+    var cols = avatarColors(e);
+    var g = new THREE.Group();
+    var body = new THREE.Mesh(new THREE.CylinderGeometry(0.30, 0.38, 0.95, 12),
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(cols.shirt) }));
+    body.position.y = 0.95;
+    var head = new THREE.Mesh(new THREE.SphereGeometry(0.30, 16, 12),
+      new THREE.MeshLambertMaterial({ color: 0xF2C9A0 }));
+    head.position.y = 1.72;
+    var hair = new THREE.Mesh(new THREE.SphereGeometry(0.31, 16, 12),
+      new THREE.MeshLambertMaterial({ color: new THREE.Color(cols.hair) }));
+    hair.scale.set(1, 0.62, 1);
+    hair.position.y = 1.86;
+    g.add(body, head, hair);
+    var name = makeTextSprite(e.name || "");
+    name.position.y = 2.45;
+    g.add(name);
+    var ring = new THREE.Mesh(new THREE.RingGeometry(0.55, 0.72, 40),
+      new THREE.MeshBasicMaterial({ color: 0x16A34A, side: THREE.DoubleSide, transparent: true, opacity: 0.95 }));
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 2.85;
+    ring.visible = false;
+    g.add(ring);
+    var blocked = new THREE.Mesh(new THREE.OctahedronGeometry(0.32),
+      new THREE.MeshBasicMaterial({ color: 0xDC2626 }));
+    blocked.position.y = 3.05;
+    blocked.visible = false;
+    g.add(blocked);
+    var bub = makeBubbleSprite();
+    bub.sprite.position.y = 3.6;
+    bub.sprite.visible = false;
+    g.add(bub.sprite);
+    g.userData.personId = e.id;
+    g.traverse(function (o) { o.userData.personId = e.id; });
+    return { id: e.id, group: g, ring: ring, ringPct: -1, blocked: blocked, blockedBaseY: 3.05, bubble: bub };
+  }
+  function makeRoom3dDesk(x, z) {
+    var g = new THREE.Group();
+    var slabMat = new THREE.MeshLambertMaterial({ color: 0xC9BFA8 });
+    var slab = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.78, 1.0), slabMat);
+    slab.position.y = 0.39;
+    var screenMat = new THREE.MeshBasicMaterial({ color: 0x374151 });
+    var screen = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.6, 0.06), screenMat);
+    screen.position.set(0, 1.15, -0.30);
+    var chairMat = new THREE.MeshLambertMaterial({ color: 0x94A3B8 });
+    var seat = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.12, 0.55), chairMat);
+    seat.position.set(0, 0.5, 1.15);
+    var back = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.6, 0.12), chairMat);
+    back.position.set(0, 0.85, 1.42);
+    g.add(slab, screen, seat, back);
+    g.position.set(x, 0, z);
+    return { group: g, slabMat: slabMat, screenMat: screenMat };
+  }
+  function buildRoom3d() {
+    var st = $("room3dStatus");
+    try {
+      var canvas = $("room3dCanvas");
+      var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      renderer.shadowMap.enabled = false;
+      var scene = new THREE.Scene();
+      scene.background = new THREE.Color(0x0B1220);
+      var camera = new THREE.OrthographicCamera(-10, 10, 10, -10, 0.1, 100);
+      camera.position.set(20, 20, 20);
+      camera.lookAt(0, 0.8, 0);
+      scene.add(new THREE.AmbientLight(0xffffff, 1.1));
+      var dir = new THREE.DirectionalLight(0xffffff, 1.2);
+      dir.position.set(10, 20, 8);
+      scene.add(dir);
+      var floor = new THREE.Mesh(new THREE.BoxGeometry(28, 0.5, 18),
+        new THREE.MeshLambertMaterial({ color: 0xD9D2C4 }));
+      floor.position.set(0, -0.25, 0);
+      scene.add(floor);
+      var wallMat = new THREE.MeshLambertMaterial({ color: 0xEDEDE8 });
+      var backWall = new THREE.Mesh(new THREE.BoxGeometry(28, 4.5, 0.4), wallMat);
+      backWall.position.set(0, 2.25, -9.2);
+      var leftWall = new THREE.Mesh(new THREE.BoxGeometry(0.4, 4.5, 18), wallMat);
+      leftWall.position.set(-14.2, 2.25, 0);
+      var rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.4, 4.5, 18), wallMat);
+      rightWall.position.set(14.2, 2.25, 0);
+      var part1 = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3, 6), wallMat);
+      part1.position.set(-7, 1.5, -6);
+      var part2 = new THREE.Mesh(new THREE.BoxGeometry(7, 3, 0.4), wallMat);
+      part2.position.set(-10.5, 1.5, -3);
+      scene.add(backWall, leftWall, rightWall, part1, part2);
+      var board = new THREE.Mesh(new THREE.BoxGeometry(7, 3, 0.15),
+        new THREE.MeshLambertMaterial({ color: 0x1F2937 }));
+      board.position.set(4, 2.2, -8.95);
+      scene.add(board);
+      var tableTop = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, 0.1, 20),
+        new THREE.MeshLambertMaterial({ color: 0xB45309 }));
+      tableTop.position.set(10, 0.75, 4);
+      var leg = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.72, 10),
+        new THREE.MeshLambertMaterial({ color: 0x6B7280 }));
+      leg.position.set(10, 0.36, 4);
+      var pot = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.24, 0.45, 12),
+        new THREE.MeshLambertMaterial({ color: 0xB45309 }));
+      pot.position.set(12.6, 0.22, 4);
+      var leaf = new THREE.Mesh(new THREE.SphereGeometry(0.55, 12, 10),
+        new THREE.MeshLambertMaterial({ color: 0x16A34A }));
+      leaf.position.set(12.6, 0.95, 4);
+      scene.add(tableTop, leg, pot, leaf);
+      R3D.renderer = renderer;
+      R3D.scene = scene;
+      R3D.camera = camera;
+      R3D.boardGroup = new THREE.Group();
+      scene.add(R3D.boardGroup);
+      R3D.deskParts = [];
+      [[-3, -6], [2, -6], [6, -6], [10, -6]].forEach(function (d) {
+        var desk = makeRoom3dDesk(d[0], d[1]);
+        scene.add(desk.group);
+        R3D.deskParts.push(desk);
+      });
+      var directorDesk = makeRoom3dDesk(-11, -6);
+      scene.add(directorDesk.group);
+      var selRing = new THREE.Mesh(new THREE.RingGeometry(0.75, 0.95, 40),
+        new THREE.MeshBasicMaterial({ color: 0xF59E0B, side: THREE.DoubleSide, transparent: true, opacity: 0.9 }));
+      selRing.rotation.x = -Math.PI / 2;
+      selRing.visible = false;
+      scene.add(selRing);
+      R3D.selectionRing = selRing;
+      R3D.built = true;
+      R3D.peopleIds = "";
+      state.messages.forEach(function (m) { R3D.seenMsgIds[m.id] = true; });
+      resizeRoom3d();
+      refreshRoom3dAll();
+      if (st) st.textContent = "";
+      if (R3D.mode === "3d") start3dLoop(); else renderRoom3dOnce();
+    } catch (e) {
+      if (st) st.textContent = "Không khởi tạo được phòng 3D: " + e.message;
+      console.warn("room3d:", e);
+    }
+  }
+  function syncRoom3dPeople() {
+    var staff = room3dAiStaff().slice(0, 4);
+    var ids = staff.map(function (s) { return s.id; }).join(",");
+    if (R3D.peopleIds === ids) return;
+    R3D.people.forEach(function (p) { R3D.scene.remove(p.group); });
+    R3D.people = staff.map(function (e) {
+      var p = makeRoom3dPerson(e);
+      R3D.scene.add(p.group);
+      return p;
+    });
+    R3D.peopleIds = ids;
+  }
+  function refreshRoom3dPeople() {
+    if (!R3D.built) return;
+    syncRoom3dPeople();
+    var desks = [{ x: -3, z: -6 }, { x: 2, z: -6 }, { x: 6, z: -6 }, { x: 10, z: -6 }];
+    var rests = [{ x: 9, z: 4 }, { x: 11, z: 4 }, { x: 10, z: 5.6 }, { x: 8.6, z: 5.6 }];
+    R3D.people.forEach(function (p, i) {
+      var pr = presOf(p.id);
+      var st = presStateKind(pr);
+      var dp = R3D.deskParts[i];
+      if (st.kind === "nodata" || st.kind === "offline") {
+        p.group.visible = false;
+        if (dp) { dp.screenMat.color.set(0x374151); dp.slabMat.color.set(0x6B7280); }
+      } else {
+        p.group.visible = true;
+        if (dp) { dp.screenMat.color.set(0x38BDF8); dp.slabMat.color.set(0xC9BFA8); }
+        var pos = (st.kind === "working" || st.kind === "blocked")
+          ? { x: desks[i].x, z: desks[i].z + 1.15 }
+          : rests[i % rests.length];
+        p.group.position.set(pos.x, 0, pos.z);
+      }
+      var pct = presProgressPct(pr);
+      if (st.kind === "working" && pct !== null) {
+        p.ring.visible = true;
+        if (p.ringPct !== pct) {
+          p.ring.geometry.dispose();
+          p.ring.geometry = new THREE.RingGeometry(0.55, 0.72, 40, 1, 0, pct / 100 * Math.PI * 2);
+          p.ringPct = pct;
+        }
+      } else {
+        p.ring.visible = false;
+        p.ringPct = -1;
+      }
+      p.blocked.visible = (st.kind === "blocked");
+    });
+    var j;
+    for (j = R3D.people.length; j < R3D.deskParts.length; j++) {
+      R3D.deskParts[j].screenMat.color.set(0x374151);
+      R3D.deskParts[j].slabMat.color.set(0x6B7280);
+    }
+    renderRoom3dLegend();
+    if (R3D.mode === "list") renderRoom3dList();
+    if (R3D.selectedId) selectRoom3dPerson(R3D.selectedId);
+    if (R3D.reduced) renderRoom3dOnce();
+  }
+  function refreshRoom3dBoard() {
+    if (!R3D.built || !R3D.boardGroup) return;
+    while (R3D.boardGroup.children.length) R3D.boardGroup.remove(R3D.boardGroup.children[0]);
+    if (!R3D.boardMats) {
+      R3D.boardMats = {
+        "Chờ nhận": new THREE.MeshBasicMaterial({ color: 0x9CA3AF }),
+        "Đã nhận": new THREE.MeshBasicMaterial({ color: 0x38BDF8 }),
+        "Đang làm": new THREE.MeshBasicMaterial({ color: 0xF59E0B }),
+        "Chờ duyệt": new THREE.MeshBasicMaterial({ color: 0xFB923C })
+      };
+      R3D.tileGeo = new THREE.BoxGeometry(0.7, 0.4, 0.06);
+    }
+    var open = state.tasks.filter(function (t) { return t.status !== "Hoàn thành"; }).slice(0, 24);
+    open.forEach(function (t, i) {
+      var col = i % 8, row = Math.floor(i / 8);
+      var tile = new THREE.Mesh(R3D.tileGeo, R3D.boardMats[t.status] || R3D.boardMats["Chờ nhận"]);
+      tile.position.set(1.0 + col * 0.8, 3.3 - row * 0.9, -8.82);
+      R3D.boardGroup.add(tile);
+    });
+    if (R3D.reduced) renderRoom3dOnce();
+  }
+  function refreshRoom3dBubbles(prevIds) {
+    if (!R3D.built) return;
+    if (state.currentTab !== "3d") {
+      state.messages.forEach(function (m) { R3D.seenMsgIds[m.id] = true; });
+      return;
+    }
+    state.messages.forEach(function (m) {
+      if (prevIds[m.id] || R3D.seenMsgIds[m.id]) return;
+      R3D.seenMsgIds[m.id] = true;
+      var p = null, i;
+      for (i = 0; i < R3D.people.length; i++) if (R3D.people[i].id === m.senderId) p = R3D.people[i];
+      if (p) showRoom3dBubble(p, String(m.content || "").slice(0, 60));
+    });
+  }
+  function showRoom3dBubble(p, text) {
+    p.bubble.setText(text);
+    p.bubble.sprite.visible = true;
+    if (R3D.bubbleTimers[p.id]) clearTimeout(R3D.bubbleTimers[p.id]);
+    R3D.bubbleTimers[p.id] = setTimeout(function () { p.bubble.sprite.visible = false; }, 6000);
+  }
+  function room3dStateDot(kind) {
+    if (kind === "working") return '<span class="dot on"></span>';
+    if (kind === "blocked") return '<span class="dot late"></span>';
+    return '<span class="dot off"></span>';
+  }
+  function room3dPanelHtml(e, pr, st, task) {
+    var pct = presProgressPct(pr);
+    return '<div style="display:flex;gap:10px;align-items:center">' + avatarHtml(e, "sm") +
+      '<div><b>' + esc(e.name || "") + "</b> · " + esc(e.title || "") + "</div></div>" +
+      '<p class="hint">Trạng thái: ' + esc(st.label) + "</p>" +
+      '<p>Đang làm: ' + esc((pr && pr.currentWork) || e.currentWork || "—") + "</p>" +
+      '<p>Việc: ' + esc(task ? (task.title || "") : (pr && pr.taskId ? pr.taskId : "—")) + "</p>" +
+      '<p>Tiến độ: ' + (pct !== null ? pct + "%" : "chưa có dữ liệu") + "</p>" +
+      '<p class="hint">Cập nhật lần cuối: ' + esc(presAgeText(pr)) + "</p>" +
+      '<div style="display:flex;gap:8px;flex-wrap:wrap">' +
+      '<button class="btn small" type="button" data-room3d-action="msg" data-room3d-person="' + esc(e.id) + '">Nhắn</button>' +
+      (canManage() ? '<button class="btn small" type="button" data-room3d-action="assign" data-room3d-person="' + esc(e.id) + '">Giao việc</button>' : "") +
+      "</div>";
+  }
+  function selectRoom3dPerson(id) {
+    R3D.selectedId = id;
+    var panel = $("room3dPanel");
+    if (!panel) return;
+    var e = id ? empById(id) : null;
+    if (!e) {
+      panel.innerHTML = '<p class="hint">Bấm vào một nhân vật trong phòng để xem chi tiết.</p>';
+      if (R3D.selectionRing) R3D.selectionRing.visible = false;
+      return;
+    }
+    var pr = presOf(id);
+    var st = presStateKind(pr);
+    var task = pr && pr.taskId ? findTask(pr.taskId) : null;
+    panel.innerHTML = room3dPanelHtml(e, pr, st, task);
+    var p = null, i;
+    for (i = 0; i < R3D.people.length; i++) if (R3D.people[i].id === id) p = R3D.people[i];
+    if (p && R3D.selectionRing) {
+      R3D.selectionRing.visible = true;
+      R3D.selectionRing.position.set(p.group.position.x, 0.07, p.group.position.z);
+    } else if (R3D.selectionRing) R3D.selectionRing.visible = false;
+  }
+  function renderRoom3dLegend() {
+    var box = $("room3dLegend");
+    if (!box) return;
+    var staff = room3dAiStaff();
+    if (!staff.length) {
+      box.innerHTML = '<p class="hint">Chưa có nhân viên nào.</p>';
+      return;
+    }
+    box.innerHTML = staff.map(function (e, i) {
+      var pr = presOf(e.id);
+      var st = presStateKind(pr);
+      return '<div class="health-row">' + avatarHtml(e, "sm") +
+        '<div style="flex:1;min-width:0"><b>' + esc(e.name || "") + "</b> · " + room3dStateDot(st.kind) + " " + esc(st.label) +
+        '<div class="hint">' + esc((pr && pr.currentWork) || e.currentWork || "—") +
+        (i >= 4 ? " · chưa có bàn trong phòng 3D" : "") + "</div></div></div>";
+    }).join("");
+  }
+  function renderRoom3dList() {
+    var box = $("room3dList");
+    if (!box) return;
+    var staff = room3dAiStaff();
+    if (!staff.length) {
+      box.innerHTML = '<p class="hint">Chưa có nhân viên nào.</p>';
+      return;
+    }
+    box.innerHTML = staff.map(function (e) {
+      var pr = presOf(e.id);
+      var st = presStateKind(pr);
+      var task = pr && pr.taskId ? findTask(pr.taskId) : null;
+      return '<div class="card" style="margin-bottom:10px">' + room3dPanelHtml(e, pr, st, task) + "</div>";
+    }).join("");
+  }
+  function refreshRoom3dAll() {
+    refreshRoom3dPeople();
+    refreshRoom3dBoard();
+  }
+  function resizeRoom3d() {
+    if (!R3D.built) return;
+    var wrap = $("room3dCanvasWrap");
+    var w = wrap ? wrap.clientWidth : 0;
+    var h = wrap ? wrap.clientHeight : 0;
+    if (w < 10 || h < 10) { w = 800; h = 420; }
+    R3D.renderer.setSize(w, h, false);
+    var aspect = w / h;
+    var halfH = Math.max(10, 14 / aspect);
+    var cam = R3D.camera;
+    cam.left = -halfH * aspect;
+    cam.right = halfH * aspect;
+    cam.top = halfH;
+    cam.bottom = -halfH;
+    cam.updateProjectionMatrix();
+  }
+  function renderRoom3dOnce() {
+    if (R3D.built) R3D.renderer.render(R3D.scene, R3D.camera);
+  }
+  function room3dLoop(ts) {
+    if (!R3D.built || R3D.mode !== "3d" || state.currentTab !== "3d") { R3D.raf = 0; return; }
+    if (ts - R3D.lastFrame >= 33) {
+      R3D.lastFrame = ts;
+      var t = ts / 1000, i;
+      for (i = 0; i < R3D.people.length; i++) {
+        var p = R3D.people[i];
+        if (p.blocked.visible) p.blocked.position.y = p.blockedBaseY + Math.sin(t * 2.2) * 0.12;
+      }
+      R3D.renderer.render(R3D.scene, R3D.camera);
+    }
+    R3D.raf = requestAnimationFrame(room3dLoop);
+  }
+  function start3dLoop() {
+    if (!R3D.built) return;
+    if (R3D.reduced) { renderRoom3dOnce(); return; }
+    if (state.currentTab !== "3d" || R3D.mode !== "3d") return;
+    if (R3D.raf) return;
+    R3D.lastFrame = 0;
+    R3D.raf = requestAnimationFrame(room3dLoop);
+  }
+  function stop3dLoop() {
+    if (R3D.raf) cancelAnimationFrame(R3D.raf);
+    R3D.raf = 0;
+  }
+  function setRoom3dMode(mode) {
+    R3D.mode = mode;
+    var wrap = $("room3dCanvasWrap"), list = $("room3dList"), btn = $("room3dModeBtn");
+    if (wrap) wrap.classList.toggle("hidden", mode !== "3d");
+    if (list) list.classList.toggle("hidden", mode !== "list");
+    if (btn) btn.textContent = mode === "3d" ? "Chế độ danh sách" : "Chế độ 3D";
+    if (mode === "list") { stop3dLoop(); renderRoom3dList(); }
+    else { resizeRoom3d(); start3dLoop(); }
+  }
+  function init3d() {
+    var gate = $("room3dGate"), wrap = $("room3dWrap");
+    if (!isDirector()) {
+      if (gate) gate.classList.remove("hidden");
+      if (wrap) wrap.classList.add("hidden");
+      return;
+    }
+    if (gate) gate.classList.add("hidden");
+    if (wrap) wrap.classList.remove("hidden");
+    if (R3D.built) {
+      refreshRoom3dAll();
+      if (R3D.mode === "3d") start3dLoop();
+      return;
+    }
+    var st = $("room3dStatus");
+    if (typeof THREE !== "undefined") { buildRoom3d(); return; }
+    if (R3D.loading) {
+      if (st) st.textContent = "Đang tải three.js…";
+      return;
+    }
+    R3D.loading = true;
+    if (st) st.textContent = "Đang tải three.js…";
+    var script = document.createElement("script");
+    script.src = THREE_CDN;
+    script.onload = function () {
+      R3D.loading = false;
+      if (typeof THREE === "undefined") {
+        if (st) st.textContent = "Không tải được three.js. Kiểm tra mạng rồi mở lại tab Phòng 3D.";
+        return;
+      }
+      buildRoom3d();
+    };
+    script.onerror = function () {
+      R3D.loading = false;
+      if (st) st.textContent = "Không tải được three.js. Kiểm tra mạng rồi mở lại tab Phòng 3D.";
+    };
+    document.head.appendChild(script);
+  }
+
+  /* ---------- Khởi tạo Phase 4 (gọi đầu tiên trong DOMContentLoaded) ---------- */
+  function initPhase4() {
+    loadHandledMap();
+    try { applyTheme(localStorage.getItem("enteesee-theme") || "light"); } catch (e) {}
+    var mq = window.matchMedia && window.matchMedia("(max-width: 960px)");
+    state.kanbanCol = mq && mq.matches ? TASK_STATUSES[0] : "all";
+    function bindSel(id, fn) { var el = $(id); if (el) el.addEventListener("change", fn); }
+    function bindChk(id, fn) { var el = $(id); if (el) el.addEventListener("change", fn); }
+    bindSel("chatChannelSel", function () { state.chatChannel = $("chatChannelSel").value; renderMessages(); });
+    bindSel("chatThreadSel", function () { state.chatThread = $("chatThreadSel").value; renderMessages(); });
+    bindSel("chatKindSel", function () { state.chatKind = $("chatKindSel").value; renderMessages(); });
+    bindChk("chatNeedsOnly", function () { state.chatNeedsOnly = $("chatNeedsOnly").checked; renderMessages(); });
+    bindChk("chatUrgentOnly", function () { state.chatUrgentOnly = $("chatUrgentOnly").checked; renderMessages(); });
+    bindChk("chatUnhandledOnly", function () { state.chatUnhandledOnly = $("chatUnhandledOnly").checked; renderMessages(); });
+    bindSel("taskAssigneeFilter", function () { state.taskAssigneeFilter = $("taskAssigneeFilter").value; renderTasks(); });
+    bindSel("taskPrioFilter", function () { state.taskPrioFilter = $("taskPrioFilter").value; renderTasks(); });
+    bindSel("taskRoleFilter", function () { state.taskRoleFilter = $("taskRoleFilter").value; renderTasks(); });
+    var vb = $("taskViewBoardBtn");
+    if (vb) vb.addEventListener("click", function () { setTaskView("board"); });
+    var vt = $("taskViewTreeBtn");
+    if (vt) vt.addEventListener("click", function () { setTaskView("tree"); });
+    bindSel("themeSelect", function () { setTheme($("themeSelect").value); });
+    var nc = $("notifCheck");
+    if (nc) {
+      try { nc.checked = localStorage.getItem("enteesee-notify") === "1"; } catch (e) {}
+      nc.addEventListener("change", function () {
+        try { localStorage.setItem("enteesee-notify", nc.checked ? "1" : "0"); } catch (e) {}
+        if (nc.checked && "Notification" in window && Notification.permission === "default") {
+          try { Notification.requestPermission().catch(function () {}); } catch (e) {}
+        }
+      });
+    }
+    var qf = $("quickTaskForm");
+    if (qf) qf.addEventListener("submit", onQuickTask);
+    var rf = $("railChatForm");
+    if (rf) rf.addEventListener("submit", onRailChat);
+    var lb = $("logLoadBtn");
+    if (lb) lb.addEventListener("click", function () { loadDecisions(); });
+    var eb = $("logExportBtn");
+    if (eb) eb.addEventListener("click", exportDecisionsLog);
+    var ls = $("logSearchInput");
+    if (ls) ls.addEventListener("input", function () { renderDecisions(); });
+    var mb = $("room3dModeBtn");
+    if (mb) mb.addEventListener("click", function () { setRoom3dMode(R3D.mode === "3d" ? "list" : "3d"); });
+    var gs = $("globalSearch");
+    if (gs) {
+      gs.addEventListener("input", renderSearchResults);
+      gs.addEventListener("focus", function () { if (gs.value.trim()) renderSearchResults(); });
+      gs.addEventListener("keydown", function (ev) { if (ev.key === "Escape") { closeSearchPanel(); gs.blur(); } });
+    }
+    document.addEventListener("keydown", function (ev) {
+      if (ev.key !== "/") return;
+      var ae = document.activeElement;
+      if (ae && /INPUT|TEXTAREA|SELECT/.test(ae.tagName)) return;
+      if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+      var s = $("globalSearch");
+      if (s) { ev.preventDefault(); s.focus(); }
+    });
+    document.addEventListener("click", function (ev) {
+      if (ev.target && ev.target.closest && ev.target.closest(".search-wrap")) return;
+      closeSearchPanel();
+    });
+    document.addEventListener("click", function (ev) {
+      var t = ev.target && ev.target.closest ? ev.target.closest(
+        "[data-kcol],[data-handled-toggle],[data-highlight-goto],[data-room3d-action],[data-search-item],[data-rail-goto],[data-rail-task],[data-rail-msg]") : null;
+      if (!t) return;
+      if (t.hasAttribute("data-kcol")) { setKanbanCol(t.getAttribute("data-kcol")); return; }
+      if (t.hasAttribute("data-handled-toggle")) { toggleHandledMsg(t.getAttribute("data-handled-toggle")); return; }
+      if (t.hasAttribute("data-highlight-goto")) {
+        var g = t.getAttribute("data-highlight-goto");
+        if (g === "duyet") switchTab("duyet");
+        else { setTaskFilterUI("overdue"); switchTab("tasks"); }
+        return;
+      }
+      if (t.hasAttribute("data-room3d-action")) {
+        var act = t.getAttribute("data-room3d-action");
+        var pid = t.getAttribute("data-room3d-person");
+        var e = empById(pid);
+        if (!e) return;
+        if (act === "msg") {
+          switchTab("room");
+          var inp = $("messageInput");
+          if (inp) {
+            inp.value = (inp.value ? inp.value + " " : "") + "@" + (e.name || "") + " ";
+            inp.focus();
+            try { inp.selectionStart = inp.selectionEnd = inp.value.length; } catch (err) {}
+          }
+        } else if (act === "assign" && canManage()) {
+          switchTab("tasks");
+          var as = $("taskAssignee");
+          if (as) as.value = pid;
+          var tt = $("taskTitle");
+          if (tt) { tt.focus(); try { tt.scrollIntoView({ block: "center" }); } catch (err) {} }
+        }
+        return;
+      }
+      if (t.hasAttribute("data-search-item")) {
+        var type = t.getAttribute("data-search-type"), sid = t.getAttribute("data-search-id");
+        closeSearchPanel();
+        if (type === "task") openTask(sid);
+        else if (type === "msg") { switchTab("room"); jumpToMessage(sid); }
+        else if (type === "emp") openProfile(sid);
+        else if (type === "dec") { switchTab("log"); if (!state.decisionsLoaded) loadDecisions(); }
+        return;
+      }
+      if (t.hasAttribute("data-rail-goto")) { switchTab(t.getAttribute("data-rail-goto")); return; }
+      if (t.hasAttribute("data-rail-task")) { openTask(t.getAttribute("data-rail-task")); return; }
+      if (t.hasAttribute("data-rail-msg")) { switchTab("room"); jumpToMessage(t.getAttribute("data-rail-msg")); return; }
+    });
+    var ml = $("messageList");
+    if (ml) {
+      var sx = 0, sy = 0;
+      ml.addEventListener("touchstart", function (ev) {
+        var t0 = ev.touches[0];
+        sx = t0.clientX; sy = t0.clientY;
+      }, { passive: true });
+      ml.addEventListener("touchend", function (ev) {
+        var t0 = ev.changedTouches[0];
+        var dx = t0.clientX - sx, dy = t0.clientY - sy;
+        if (dx > 60 && Math.abs(dy) < 40) {
+          var item = ev.target && ev.target.closest ? ev.target.closest(".msg") : null;
+          if (!item) return;
+          if (ev.target.closest("button,a")) return;
+          var mid = item.getAttribute("data-msg-id");
+          var m = null, i;
+          for (i = 0; i < state.messages.length; i++) if (state.messages[i].id === mid) m = state.messages[i];
+          if (!m) return;
+          var inp = $("messageInput");
+          if (inp) {
+            inp.value = (inp.value ? inp.value + " " : "") + "@" + (m.senderName || "") + " ";
+            inp.focus();
+          }
+        }
+      });
+    }
+    var cvs = $("room3dCanvas");
+    if (cvs) {
+      var downX = 0, downY = 0;
+      cvs.addEventListener("pointerdown", function (ev) { downX = ev.clientX; downY = ev.clientY; });
+      cvs.addEventListener("pointerup", function (ev) {
+        if (Math.abs(ev.clientX - downX) > 6 || Math.abs(ev.clientY - downY) > 6) return;
+        if (!R3D.built) return;
+        var rect = cvs.getBoundingClientRect();
+        var nx = ((ev.clientX - rect.left) / rect.width) * 2 - 1;
+        var ny = -((ev.clientY - rect.top) / rect.height) * 2 + 1;
+        var ray = new THREE.Raycaster();
+        ray.setFromCamera({ x: nx, y: ny }, R3D.camera);
+        var hits = ray.intersectObjects(R3D.scene.children, true);
+        var id = null, i, o;
+        for (i = 0; i < hits.length; i++) {
+          o = hits[i].object;
+          while (o) {
+            if (o.userData && o.userData.personId) { id = o.userData.personId; break; }
+            o = o.parent;
+          }
+          if (id) break;
+        }
+        selectRoom3dPerson(id);
+      });
+    }
+    window.addEventListener("resize", function () {
+      if (R3D.built && state.currentTab === "3d" && R3D.mode === "3d") resizeRoom3d();
+    });
+  }
+
   /* ---------- Khởi động ---------- */
   document.addEventListener("DOMContentLoaded", function () {
+    initPhase4();
     $("loginForm").addEventListener("submit", onLoginSubmit);
     $("logoutBtn").addEventListener("click", doLogout);
     $("noProfileLogout").addEventListener("click", doLogout);
@@ -3895,6 +5237,7 @@
         stopListeners();
         stopCheckin();
         stopClock();
+        stop3dLoop();
         showLogin();
         return;
       }
