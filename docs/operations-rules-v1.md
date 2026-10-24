@@ -2,6 +2,12 @@
 
 - Phiên bản: v1.0 — CÔNG BỐ theo phê duyệt của Chủ tịch ngày 24/10/2026.
 - Trạng thái: CÓ HIỆU LỰC từ ngày 24/10/2026.
+
+## Đính chính 24/10/2026 — Vai trò theo công việc (lệnh Chủ tịch, thay thế mọi câu chữ gắn vai trò cố định)
+- Vai trò KHÔNG gắn cố định theo người hay chức danh. Vai trò của mỗi người TÙY THEO dự án/công việc được giao.
+- Chuỗi giao việc: Chủ tịch giao cho Muse, Muse giao cho cấp dưới, cấp dưới lại chia nhỏ cho cấp dưới của mình.
+- Yêu cầu: biết chia việc và biết phải làm gì để hoàn thành công việc, có quy trình làm theo.
+- Mọi câu chữ trong bản này và các bài hướng dẫn gắn vai trò cố định theo chức danh (vd Hùng=PM, Tuấn=dev, Linh=tester) HẾT hiệu lực về mặt vai trò; phần kỷ luật việc (ack, bằng chứng, duyệt, cấm) vẫn giữ.
 - Nguồn chính thức: file versioned trong repository web
   (docs/operations-rules-v1.md). Tin nhắn trong phòng KHÔNG BAO GIỜ
   thay thế bản này; tin phòng chỉ để trao đổi, thông báo, giao việc.
