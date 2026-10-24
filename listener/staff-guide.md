@@ -56,7 +56,7 @@ Kiểm tra:
 
 ```bash
 cat listener.status.json   # stream_connected phải là true sau vài giây
-tail -5 listener.log       # phải thấy "stream connected"
+tail -5 listener.log       # phải thấy "watch opened"
 ```
 
 Listener của bạn **chỉ** đánh thức bạn khi:
@@ -103,8 +103,10 @@ môi trường hay argv** — mã chỉ đi qua stdin lúc khởi động.
 
 ## Quy tắc khi bị đánh thức
 
-- Hook đánh thức vì `@tag` → **trả lời ngay trong phòng** (theo đúng luật
-  phòng họp: chỉ đăng khi được nhắc tên/việc ghi rõ mình phụ trách).
+- Hook đánh thức vì `@tag` → **trả lời ngay trong phòng**. Luật phòng họp
+  hiện hành (chốt 24/10): mọi nhân viên đều có thể tag nhau và trao đổi
+  trực tiếp khi cần phối hợp — @tag ai thì người đó được đánh thức, dù
+  người tag là Chủ tịch hay đồng nghiệp.
 - Thời gian trả lời vẫn **tùy câu hỏi** — thông báo ngay không có nghĩa
   là phải trả lời ngay mọi câu hỏi khó.
 - Không đăng tin nhắn thử nghiệm vào phòng. Không chia sẻ mã truy cập
