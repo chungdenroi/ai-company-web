@@ -5,159 +5,169 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Công ty Enteesee — Phòng Họp &amp; Điều Hành</title>
 <style>
-  /* ===== Phong cách Mẫu C — "App thân thiện" (đã duyệt) =====
-     Nền xám ấm #F4F2ED · thẻ trắng bo 20px bóng mềm lớn · nhấn xanh lá #12B76A ·
-     avatar pastel theo người · chip tint nhiều màu · chữ cơ sở 16px.
-     Mention @tag giữ xanh dương #0a7bef như Zalo/Messenger. */
+  /* ===== Thiết kế lại 24/10/2026 — "Sạch + tối giản" (thay Mẫu C) =====
+     Nền xám trung tính #F6F7F8 · thẻ trắng bo 12px viền mảnh · nhấn đen
+     #111827 · nút 44px (nhỏ 40px) · chip bo 6px · bóng CHỈ ở modal +
+     thanh điều hướng mobile (còn lại chỉ viền, không bóng).
+     GIỮ: mention @tag xanh dương #0a7bef + vòng highlight; màu nhận
+     diện avatar (JS PALETTE); chấm online xanh lá (tín hiệu trạng thái);
+     đỏ = nguy hiểm/quá hạn, hổ phách = chờ duyệt/chờ xử lý.
+     KHÔNG còn: nền be ấm, xanh lá chủ đạo, tím, chip tint nhiều màu,
+     bóng mềm lớn, icon trang trí ở tab desktop + ô thống kê. */
   :root{
-    --green:#12B76A; --green-dark:#067647; --green-hover:#0EA55E; --green-tint:#ECFDF3; --green-mid:#A6F4C5;
-    --bg:#F4F2ED; --card:#FFFFFF; --text:#1A1D21; --muted:#6B7280; --faint:#9CA3AF;
-    --border:#ECE9E2; --line:#D6D3CB; --warm:#F9F8F5;
-    --danger:#B42318; --danger-bg:#FEE4E2;
-    --ok:#067647; --ok-bg:#ECFDF3;
-    --warn:#B54708; --warn-bg:#FFFAEB;
-    --blue:#175CD3; --blue-bg:#EFF8FF;
-    --purple:#6941C6; --purple-bg:#F4F3FF;
-    --radius:20px; --radius-sm:16px;
-    --shadow:0 8px 30px rgba(26,29,33,.06),0 2px 8px rgba(26,29,33,.04);
-    --shadow-sm:0 2px 10px rgba(26,29,33,.05);
-    --shadow-lg:0 12px 34px rgba(26,29,33,.14);
-    /* Tên biến cũ mà app.js còn tham chiếu (style động) */
-    --indigo:var(--green); --indigo-dark:var(--green-dark); --indigo-soft:var(--green-tint); --indigo-mid:var(--green-mid);
+    --bg:#F6F7F8; --card:#FFFFFF; --text:#111827; --muted:#6B7280; --faint:#9CA3AF;
+    --border:#E5E7EB; --line:#D1D5DB; --soft:#F3F4F6; --soft2:#F9FAFB;
+    --accent:#111827; --accent-hover:#1F2937;
+    --danger:#B42318; --danger-bg:#FEF2F2; --danger-line:#FECACA;
+    --ok:#067647; --ok-bg:#F3F4F6;
+    --warn:#92400E; --warn-bg:#FFFBEB; --warn-line:#FDE68A;
+    --radius:12px; --radius-sm:12px;
+    --shadow:none; --shadow-sm:none;
+    --shadow-lg:0 12px 32px rgba(17,24,39,.14);
+    /* Alias giữ tương thích với mọi tham chiếu cũ (kể cả tham chiếu
+       động trong JS nếu có): tất cả trỏ về hệ trung tính mới. */
+    --warm:var(--soft);
+    --green:var(--accent); --green-dark:var(--accent); --green-hover:var(--accent-hover);
+    --green-tint:var(--soft); --green-mid:var(--line);
+    --indigo:var(--accent); --indigo-dark:var(--accent); --indigo-soft:var(--soft); --indigo-mid:var(--line);
+    --blue:var(--accent); --blue-bg:var(--soft);
+    --purple:var(--accent); --purple-bg:var(--soft);
   }
   *{box-sizing:border-box}
   html,body{margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
     background:var(--bg); color:var(--text); font-size:16px; line-height:1.5;
-    -webkit-font-smoothing:antialiased}
+    -webkit-font-smoothing:antialiased; overflow-x:hidden}
   .hidden{display:none !important}
   button{font:inherit; cursor:pointer}
   input,select,textarea{font:inherit; padding:10px 12px; border:1px solid var(--border);
-    border-radius:12px; background:#fff; color:var(--text); width:100%}
-  input:focus,select:focus,textarea:focus{outline:2px solid var(--green); outline-offset:0; border-color:var(--green)}
+    border-radius:10px; background:#fff; color:var(--text); width:100%}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent); outline-offset:0; border-color:var(--accent)}
   label{display:block; font-weight:600; margin:12px 0 6px; font-size:.93rem}
   .btn{display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:44px;
-    padding:10px 18px; border-radius:12px; border:1px solid transparent; font-weight:700; transition:background .15s,border-color .15s,box-shadow .15s}
-  .btn.primary{background:var(--green); color:#fff; box-shadow:0 4px 12px rgba(18,183,106,.28)}
-  .btn.primary:hover{background:var(--green-hover)}
-  .btn.ghost{background:#fff; border-color:var(--border); color:var(--text); min-height:40px; padding:6px 14px}
-  .btn.ghost:hover{border-color:#D6D3CB; background:#FDFCFA}
-  .btn.small{min-height:38px; padding:5px 12px; font-size:.9rem}
+    padding:10px 18px; border-radius:10px; border:1px solid transparent; font-weight:700; transition:background .15s,border-color .15s}
+  .btn.primary{background:var(--accent); color:#fff}
+  .btn.primary:hover{background:var(--accent-hover)}
+  .btn.ghost{background:#fff; border-color:var(--border); color:var(--text); min-height:44px; padding:10px 18px}
+  .btn.ghost:hover{border-color:var(--line); background:var(--soft2)}
+  .btn.small{min-height:40px; padding:8px 14px; font-size:.9rem}
   .btn:disabled{opacity:.5; cursor:not-allowed}
-  .error{color:var(--danger); background:#FEF3F2; border:1px solid #FECDCA;
-    padding:10px 12px; border-radius:12px; margin:12px 0 0; font-size:.95rem}
-  .success{color:var(--green-dark); background:var(--green-tint); border:1px solid var(--green-mid);
-    padding:10px 12px; border-radius:12px; margin:12px 0 0; font-size:.95rem}
-  .notice{max-width:900px; margin:14px auto 0; padding:12px 16px; border-radius:14px;
-    background:var(--warn-bg); border:1px solid #FEDF89; color:var(--warn)}
-  .card{background:var(--card); border:1px solid rgba(236,233,226,.7); border-radius:var(--radius);
-    padding:20px; box-shadow:var(--shadow)}
+  .error{color:var(--danger); background:var(--danger-bg); border:1px solid var(--danger-line);
+    padding:10px 12px; border-radius:10px; margin:12px 0 0; font-size:.95rem}
+  .success{color:var(--text); background:var(--soft); border:1px solid var(--border);
+    padding:10px 12px; border-radius:10px; margin:12px 0 0; font-size:.95rem}
+  .notice{max-width:900px; margin:14px auto 0; padding:12px 16px; border-radius:12px;
+    background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn)}
+  .card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:20px}
   .hint{color:var(--muted); font-size:.93rem}
   .mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; letter-spacing:.4px}
   .clickable{cursor:pointer}
   .muted{color:var(--muted)}
 
-  /* Avatar pastel + chấm trạng thái + chip tint */
+  /* Avatar + chấm trạng thái + chip (hệ trung tính, bo 6px) */
   .avatar{width:44px; height:44px; border-radius:50%; color:#fff; flex:0 0 auto;
     display:flex; align-items:center; justify-content:center; font-weight:800; font-size:1.05rem}
   .avatar.sm{width:34px; height:34px; font-size:.92rem}
   .avatar.lg{width:62px; height:62px; font-size:1.5rem}
   .dot{width:11px; height:11px; border-radius:50%; background:#D1D5DB; display:inline-block; flex:0 0 auto;
     box-shadow:0 0 0 3px #fff}
-  .dot.on{background:var(--green)}
+  .dot.on{background:#16A34A}
   .dot.off{background:#D1D5DB}
-  .dot.late{background:#F04438}
+  .dot.late{background:#DC2626}
   .chip{display:inline-flex; align-items:center; gap:4px; font-size:.76rem; font-weight:700;
-    padding:3px 10px; border-radius:999px; background:#F2F4F7; color:#667085; white-space:nowrap}
-  .chip.level{background:var(--blue-bg); color:var(--blue)}
-  .chip.role{background:#F2F4F7; color:#475569; border:1px solid #EAECF0}
-  .chip.check-ok{background:var(--green-tint); color:var(--green-dark)}
-  .chip.check-late{background:var(--danger-bg); color:#912018}
+    padding:3px 10px; border-radius:6px; background:#F3F4F6; color:#374151; white-space:nowrap}
+  .chip.level{background:#E5E7EB; color:#111827}
+  .chip.role{background:#F3F4F6; color:#475569; border:1px solid #E5E7EB}
+  .chip.check-ok{background:#F3F4F6; color:#374151}
+  .chip.check-late{background:var(--danger-bg); color:#991B1B}
   .chip.check-wait{background:var(--warn-bg); color:var(--warn)}
-  .chip.susp{background:#F2F4F7; color:#98A2B3}
-  .chip.count{background:var(--green); color:#fff}
-  .kind{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:999px; background:#F2F4F7; color:#344054}
-  .kind.k-task{background:var(--green); color:#fff}
-  .kind.k-notice{background:var(--purple); color:#fff}
+  .chip.susp{background:#F3F4F6; color:#9CA3AF}
+  .chip.count{background:#111827; color:#fff}
+  .kind{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:6px; background:#F3F4F6; color:#374151}
+  .kind.k-task{background:#111827; color:#fff}
+  .kind.k-notice{background:#F3F4F6; color:#111827; border:1px solid #E5E7EB}
   .kind.k-progress{background:var(--warn-bg); color:var(--warn)}
-  .kind.k-report{background:var(--green-tint); color:var(--green-dark)}
-  .prio{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:999px; background:#F2F4F7; color:#344054}
-  .prio.p-Cao{background:var(--danger-bg); color:#912018}
+  .kind.k-report{background:#F3F4F6; color:#374151}
+  .prio{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:6px; background:#F3F4F6; color:#374151}
+  .prio.p-Cao{background:var(--danger-bg); color:#991B1B}
   .prio.p-TrungBinh{background:var(--warn-bg); color:var(--warn)}
-  .prio.p-Thap{background:var(--blue-bg); color:var(--blue)}
-  .status-chip{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:999px; background:#F2F4F7; color:#667085}
-  .status-chip.s-doing{background:var(--blue-bg); color:var(--blue)}
+  .prio.p-Thap{background:#F3F4F6; color:#374151}
+  .status-chip{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:6px; background:#F3F4F6; color:#374151}
+  .status-chip.s-doing{background:#E5E7EB; color:#111827}
   .status-chip.s-review{background:var(--warn-bg); color:var(--warn)}
-  .status-chip.s-done{background:var(--green-tint); color:var(--green-dark)}
-  .due-chip{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:999px; background:#F2F4F7; color:#475569}
-  .due-chip.overdue{background:var(--danger-bg); color:#912018}
+  .status-chip.s-done{background:#F3F4F6; color:#374151}
+  .due-chip{font-size:.76rem; font-weight:700; padding:3px 10px; border-radius:6px; background:#F3F4F6; color:#475569}
+  .due-chip.overdue{background:var(--danger-bg); color:#991B1B}
 
   /* Đăng nhập */
   #loginView{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
-    background:linear-gradient(180deg,#F4F2ED 0%,#EDEBE6 100%)}
+    background:var(--bg)}
   .login-card{width:100%; max-width:400px; padding:30px 26px}
-  .login-mark{width:52px; height:52px; border-radius:14px; background:var(--green); color:#fff;
+  .login-mark{width:52px; height:52px; border-radius:10px; background:var(--accent); color:#fff;
     display:flex; align-items:center; justify-content:center; font-weight:800; font-size:24px;
-    margin:0 auto 14px; box-shadow:0 6px 16px rgba(18,183,106,.35)}
+    margin:0 auto 14px}
   .login-card h1{margin:0 0 4px; font-size:1.65rem; color:var(--text); text-align:center; letter-spacing:-.02em}
   .login-card .sub{margin:0 0 10px; text-align:center; color:var(--muted)}
   .login-card .btn{width:100%; margin-top:18px}
 
   /* Khung ứng dụng: sidebar cố định (desktop) + cột chính */
-  .sidebar{position:fixed; inset:0 auto 0 0; width:264px; height:100vh; z-index:20;
+  .sidebar{position:fixed; inset:0 auto 0 0; width:240px; height:100vh; z-index:20;
     background:#fff; border-right:1px solid var(--border);
     display:flex; flex-direction:column; padding:24px 16px; overflow-y:auto}
-  .shell-main{margin-left:264px; min-width:0}
+  .shell-main{margin-left:240px; min-width:0}
   .brand{display:flex; align-items:center; gap:12px; min-width:0}
-  .brand .brand-mark{width:40px; height:40px; border-radius:12px; background:var(--green); color:#fff;
+  .brand .brand-mark{width:40px; height:40px; border-radius:10px; background:var(--accent); color:#fff;
     display:flex; align-items:center; justify-content:center; font-weight:800; font-size:20px; letter-spacing:-.02em;
-    box-shadow:0 6px 16px rgba(18,183,106,.35); flex:0 0 auto}
+    flex:0 0 auto}
   .brand .brand-name{font-weight:800; font-size:18px; letter-spacing:-.02em; line-height:1.1; display:block}
   .brand .brand-sub{display:block; font-size:12px; color:var(--muted); font-weight:600;
     letter-spacing:.02em; text-transform:uppercase; margin-top:2px; line-height:1.2}
   .brand-side{padding:0 8px 24px}
   .nav-label{font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
     color:var(--faint); padding:8px 12px}
-  header.topbar{position:sticky; top:0; z-index:30; background:rgba(244,242,237,.88);
+  header.topbar{position:sticky; top:0; z-index:30; background:rgba(246,247,248,.88);
     backdrop-filter:blur(12px); -webkit-backdrop-filter:blur(12px);
     display:flex; align-items:center; justify-content:flex-end; gap:10px; padding:12px 32px}
   header.topbar .brand{display:none}
   header.topbar .userbox{display:flex; align-items:center; gap:10px; min-width:0}
   header.topbar .who{font-size:.95rem; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .bell-wrap{position:relative; flex:0 0 auto}
-  .bell-btn{position:relative; width:44px; height:44px; border-radius:12px; border:1px solid var(--border);
-    background:#fff; color:#344054; display:flex; align-items:center; justify-content:center; padding:0;
-    box-shadow:var(--shadow-sm)}
-  .bell-btn:hover{border-color:#D6D3CB}
+  .bell-btn{position:relative; width:44px; height:44px; border-radius:10px; border:1px solid var(--border);
+    background:#fff; color:#374151; display:flex; align-items:center; justify-content:center; padding:0}
+  .bell-btn:hover{border-color:var(--line)}
   .bell-btn svg{width:22px; height:22px; fill:currentColor}
   .bell-btn .badge{position:absolute; top:-5px; right:-5px; margin:0; box-shadow:0 0 0 2px #fff}
   .bell-panel{position:absolute; top:52px; right:0; width:min(360px,88vw); background:#fff; color:var(--text);
-    border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow-lg); z-index:70; overflow:hidden}
+    border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow-lg); z-index:70; overflow:hidden}
   .bell-panel .bell-head{padding:12px 16px; font-weight:800; border-bottom:1px solid var(--border); color:var(--text)}
-  .bell-item{display:flex; gap:10px; padding:11px 16px; border-bottom:1px solid #F1EFE9; cursor:pointer; align-items:flex-start}
+  .bell-item{display:flex; gap:10px; padding:11px 16px; border-bottom:1px solid #F3F4F6; cursor:pointer; align-items:flex-start}
   .bell-item:last-child{border-bottom:none}
-  .bell-item:hover{background:var(--warm)}
+  .bell-item:hover{background:var(--soft2)}
   .bell-item .b-text{flex:1; font-size:.94rem}
   .bell-item .b-sub{color:var(--muted); font-size:.84rem}
   .bell-empty{padding:14px 16px; color:var(--muted); font-size:.94rem}
   nav.tabs{display:flex; flex-direction:column; gap:4px; padding:0}
   nav.tabs .tab{display:flex; align-items:center; gap:12px; width:100%; min-height:48px; padding:0 12px;
-    border:none; background:transparent; border-radius:12px; font-size:15px; font-weight:600;
-    color:#344054; text-align:left; position:relative; transition:background .15s,color .15s}
+    border:none; background:transparent; border-radius:10px; font-size:15px; font-weight:600;
+    color:#374151; text-align:left; position:relative; transition:background .15s,color .15s}
   nav.tabs .tab svg{width:22px; height:22px; flex:0 0 auto}
-  nav.tabs .tab:hover{background:var(--warm); color:var(--text)}
-  nav.tabs .tab.active{background:var(--green-tint); color:var(--green-dark)}
+  /* Desktop: tab chỉ còn chữ (icon là trang trí) — mobile giữ icon vì
+     nhãn chỉ 10.5px, icon là phương tiện nhận biết chính. */
+  @media (min-width:761px){ nav.tabs .tab svg{display:none} }
+  nav.tabs .tab:hover{background:var(--soft); color:var(--text)}
+  nav.tabs .tab.active{background:var(--soft); color:var(--text)}
   .badge{display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px;
-    padding:0 6px; border-radius:999px; background:#F04438; color:#fff; font-size:.78rem; font-weight:700; margin-left:6px}
-  nav.tabs .tab .badge{background:var(--green); margin-left:auto}
+    padding:0 6px; border-radius:999px; background:#DC2626; color:#fff; font-size:.78rem; font-weight:700; margin-left:6px}
+  nav.tabs .tab .badge{background:#DC2626; margin-left:auto}
   main.panes{max-width:1120px; margin:0 auto; padding:14px 32px 48px; width:100%}
   .tabpane h2.pane-title{font-size:1.15rem; font-weight:800; letter-spacing:-.01em; margin:6px 0 14px; color:var(--text)}
 
   /* Banner ghim */
-  .pin-banner{display:flex; gap:12px; align-items:flex-start; background:var(--purple-bg);
-    border:1.5px solid #D9D6FE; border-radius:var(--radius); padding:14px 16px; margin-bottom:16px; box-shadow:var(--shadow-sm)}
-  .pin-banner .pin-tag{font-size:.72rem; font-weight:800; letter-spacing:.6px; color:#fff; background:var(--purple);
-    padding:3px 9px; border-radius:999px; white-space:nowrap; margin-top:2px}
+  .pin-banner{display:flex; gap:12px; align-items:flex-start; background:var(--soft2);
+    border:1px solid var(--border); border-radius:var(--radius); padding:14px 16px; margin-bottom:16px}
+  .pin-banner .pin-tag{font-size:.72rem; font-weight:800; letter-spacing:.6px; color:#fff; background:#111827;
+    padding:3px 9px; border-radius:6px; white-space:nowrap; margin-top:2px}
   .pin-banner .pin-content{flex:1; white-space:pre-wrap; word-break:break-word; font-weight:600}
   .pin-banner .pin-meta{color:var(--muted); font-size:.85rem; font-weight:400}
   .pin-banner .btn{flex:0 0 auto}
@@ -165,34 +175,30 @@
   /* Tổng quan */
   .stat-grid{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:24px}
   @media (min-width:900px){ .stat-grid{grid-template-columns:repeat(4,1fr)} }
-  .stat-card{background:var(--card); border:1px solid rgba(236,233,226,.7); border-radius:var(--radius);
-    padding:20px; box-shadow:var(--shadow)}
-  .stat-icon{width:44px; height:44px; border-radius:12px; display:flex; align-items:center; justify-content:center; margin-bottom:14px}
-  .stat-icon svg{width:22px; height:22px}
-  .stat-icon.g{background:var(--green-tint); color:var(--green-dark)}
-  .stat-icon.b{background:var(--blue-bg); color:var(--blue)}
-  .stat-icon.p{background:var(--purple-bg); color:var(--purple)}
-  .stat-icon.a{background:var(--warn-bg); color:var(--warn)}
+  .stat-card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:20px}
+  /* Icon ô thống kê là trang trí (số + nhãn đã đủ thông tin) — ẩn hẳn. */
+  .stat-icon{display:none}
   .stat-card .stat-num{font-size:2rem; font-weight:800; color:var(--text); line-height:1.1; letter-spacing:-.03em}
   .stat-card .stat-label{color:var(--text); font-size:.92rem; font-weight:700; margin-top:4px}
   .emp-grid{display:grid; grid-template-columns:1fr; gap:16px}
   @media (min-width:720px){ .emp-grid{grid-template-columns:1fr 1fr} }
   @media (min-width:1080px){ .emp-grid{grid-template-columns:1fr 1fr 1fr} }
-  .emp-card{background:var(--card); border:1px solid rgba(236,233,226,.7); border-radius:var(--radius);
-    padding:20px; box-shadow:var(--shadow); transition:transform .15s, box-shadow .15s}
-  .emp-card.clickable:hover{transform:translateY(-2px); box-shadow:0 12px 34px rgba(26,29,33,.08)}
+  .emp-card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:20px; transition:border-color .15s}
+  .emp-card.clickable:hover{border-color:var(--line)}
   .emp-card .avatar{border-radius:16px; width:52px; height:52px; font-size:1.15rem}
   .emp-card .e-head{display:flex; align-items:center; gap:12px}
   .emp-card .e-name{font-weight:800; font-size:1.05rem}
   .emp-card .e-title{color:var(--muted); font-size:.92rem}
   .emp-card .e-chips{display:flex; flex-wrap:wrap; gap:6px; margin-top:10px}
-  .emp-card .e-work{margin-top:12px; font-size:.95rem; background:var(--warm); border:1px solid var(--border);
-    border-radius:12px; padding:10px 12px}
+  .emp-card .e-work{margin-top:12px; font-size:.95rem; background:var(--soft2); border:1px solid var(--border);
+    border-radius:10px; padding:10px 12px}
   .emp-card .e-foot{display:flex; flex-wrap:wrap; gap:6px 14px; margin-top:10px; color:var(--muted); font-size:.88rem; align-items:center}
 
   /* Hiện diện */
   .presence-list{display:flex; flex-direction:column}
-  .presence-item{display:flex; align-items:center; gap:12px; padding:10px 2px; border-bottom:1px solid #F1EFE9}
+  .presence-item{display:flex; align-items:center; gap:12px; padding:10px 2px; border-bottom:1px solid #F3F4F6}
   .presence-item:last-child{border-bottom:none}
   .presence-item .p-name{font-weight:700}
   .presence-item .p-work{color:var(--muted); font-size:.9rem}
@@ -201,13 +207,13 @@
 
   /* Hàng chờ duyệt */
   .approval-item{display:flex; gap:10px; align-items:center; flex-wrap:wrap; background:var(--warn-bg);
-    border:1px solid #FEDF89; border-radius:var(--radius); padding:12px 14px; margin-bottom:10px; box-shadow:var(--shadow-sm)}
+    border:1px solid var(--warn-line); border-radius:var(--radius); padding:12px 14px; margin-bottom:10px}
   .approval-item .ap-title{font-weight:700; flex:1; min-width:180px}
   .approval-item .ap-meta{color:var(--muted); font-size:.88rem}
 
   /* Nhật ký hoạt động */
   .activity-list{display:flex; flex-direction:column}
-  .activity-item{display:flex; gap:9px; padding:9px 2px; border-bottom:1px solid #F1EFE9; font-size:.95rem; align-items:baseline}
+  .activity-item{display:flex; gap:9px; padding:9px 2px; border-bottom:1px solid #F3F4F6; font-size:.95rem; align-items:baseline}
   .activity-item:last-child{border-bottom:none}
   .activity-item .a-actor{font-weight:700; white-space:nowrap}
   .activity-item .a-time{color:var(--faint); font-size:.83rem; margin-left:auto; white-space:nowrap; flex:0 0 auto}
@@ -231,75 +237,75 @@
   .org-tree li:last-child::before{border-right:2px solid var(--line); border-radius:0 8px 0 0}
   .org-tree li:first-child::after{border-radius:8px 0 0 0}
   .org-tree > ul > li::before,.org-tree > ul > li::after{display:none}
-  .org-node{background:var(--card); border:1.5px solid var(--border); border-radius:18px;
-    padding:14px; width:200px; box-shadow:var(--shadow-sm); text-align:center; position:relative; transition:border-color .15s, box-shadow .15s}
-  .org-tree > ul > li > .org-node{background:var(--green-tint); border-color:var(--green-mid)}
-  .org-node.clickable:hover{border-color:var(--green-mid); box-shadow:var(--shadow)}
+  .org-node{background:var(--card); border:1.5px solid var(--border); border-radius:12px;
+    padding:14px; width:200px; text-align:center; position:relative; transition:border-color .15s}
+  .org-tree > ul > li > .org-node{background:var(--soft); border-color:var(--line)}
+  .org-node.clickable:hover{border-color:var(--line)}
   .org-node .avatar{margin:0 auto 7px}
   .org-node .o-name{font-weight:800}
   .org-node .o-title{color:var(--muted); font-size:.86rem}
   .org-node .o-chips{display:flex; justify-content:center; flex-wrap:wrap; gap:5px; margin-top:7px}
   .org-node .o-dot{position:absolute; top:10px; right:10px}
-  .toggle-btn{margin-top:9px; width:30px; height:30px; border-radius:50%; border:1.5px solid var(--green-mid);
-    background:var(--green-tint); color:var(--green-dark); font-weight:800; font-size:1rem; line-height:1;
+  .toggle-btn{margin-top:9px; width:30px; height:30px; border-radius:50%; border:1.5px solid var(--line);
+    background:var(--soft); color:var(--text); font-weight:800; font-size:1rem; line-height:1;
     display:inline-flex; align-items:center; justify-content:center; padding:0}
-  .toggle-btn:hover{background:var(--green); color:#fff; border-color:var(--green)}
+  .toggle-btn:hover{background:var(--accent); color:#fff; border-color:var(--accent)}
 
   /* Treeview nhân viên */
-  .tv-wrap{background:var(--card); border:1px solid rgba(236,233,226,.7); border-radius:var(--radius);
-    padding:14px 16px; box-shadow:var(--shadow)}
+  .tv-wrap{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:14px 16px}
   ul.tv{list-style:none; margin:0; padding-left:22px; border-left:2px solid var(--border)}
   ul.tv.root{padding-left:0; border-left:none}
   ul.tv li{margin:7px 0}
-  .tv-node{display:flex; align-items:center; gap:10px; background:#FDFCFA; border:1px solid var(--border);
-    border-radius:14px; padding:9px 12px; flex-wrap:wrap}
-  .tv-node:hover{border-color:#D6D3CB}
+  .tv-node{display:flex; align-items:center; gap:10px; background:var(--soft2); border:1px solid var(--border);
+    border-radius:10px; padding:9px 12px; flex-wrap:wrap}
+  .tv-node:hover{border-color:var(--line)}
   .tv-node .n-name{font-weight:700}
   .tv-node .n-title{color:var(--muted); font-size:.88rem}
   .tv-node .n-kids{color:var(--faint); font-size:.84rem}
   .tv-node .spacer{margin-left:auto; display:flex; gap:6px; align-items:center; flex-wrap:wrap}
   .tv-toggle{width:28px; height:28px; border-radius:8px; border:1px solid var(--border); background:#fff;
-    font-weight:800; color:var(--green-dark); display:inline-flex; align-items:center; justify-content:center; padding:0; flex:0 0 auto}
-  .tv-toggle:hover{background:var(--green-tint)}
+    font-weight:800; color:var(--text); display:inline-flex; align-items:center; justify-content:center; padding:0; flex:0 0 auto}
+  .tv-toggle:hover{background:var(--soft)}
 
   /* Phòng họp */
   .messages{display:flex; flex-direction:column; gap:12px; padding-bottom:10px}
   .msg{background:var(--card); border:1px solid var(--border); border-radius:var(--radius-sm);
-    padding:14px 16px; box-shadow:var(--shadow-sm); display:flex; gap:11px}
+    padding:14px 16px; display:flex; gap:11px}
   .msg .msg-body{flex:1; min-width:0}
   .msg .meta{display:flex; flex-wrap:wrap; gap:5px 9px; align-items:baseline; margin-bottom:3px}
   .msg .sender{font-weight:700}
   .msg .title{color:var(--muted); font-size:.88rem}
   .msg .time{color:var(--faint); font-size:.8rem; margin-left:auto}
   .msg .content{white-space:pre-wrap; word-break:break-word}
-  .msg.is-task{border:1.5px solid var(--green-mid); background:var(--green-tint)}
-  .msg.is-notice{border-left:5px solid var(--purple)}
-  .msg .linked-task{margin-top:7px; font-size:.88rem; color:var(--green-dark); background:#fff;
-    border:1px solid var(--green-mid); border-radius:10px; padding:6px 9px; display:inline-block}
+  .msg.is-task{border:1px solid var(--border); background:var(--soft2)}
+  .msg.is-notice{border-left:3px solid #111827}
+  .msg .linked-task{margin-top:7px; font-size:.88rem; color:var(--text); background:#fff;
+    border:1px solid var(--border); border-radius:10px; padding:6px 9px; display:inline-block}
   .msg .pin-row{margin-top:8px}
   .attachments{margin-top:8px; display:flex; flex-direction:column; gap:8px}
-  .att-img img{max-width:100%; max-height:340px; border-radius:14px; border:1px solid var(--border); display:block}
-  .att-loading{color:var(--muted); font-size:.9rem; background:var(--warm); border:1px dashed var(--line);
-    border-radius:12px; padding:12px; text-align:center}
-  .att-file{display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:var(--warm);
-    border:1px solid var(--border); border-radius:12px; padding:10px 12px; font-weight:600}
-  .att-file:hover{border-color:#D6D3CB; background:#fff}
+  .att-img img{max-width:100%; max-height:340px; border-radius:10px; border:1px solid var(--border); display:block}
+  .att-loading{color:var(--muted); font-size:.9rem; background:var(--soft2); border:1px dashed var(--line);
+    border-radius:10px; padding:12px; text-align:center}
+  .att-file{display:flex; align-items:center; gap:10px; width:100%; text-align:left; background:var(--soft2);
+    border:1px solid var(--border); border-radius:10px; padding:10px 12px; font-weight:600}
+  .att-file:hover{border-color:var(--line); background:#fff}
   .att-file .f-size{color:var(--muted); font-weight:400; font-size:.86rem; margin-left:auto; white-space:nowrap}
   .att-file .f-name{word-break:break-all}
   .composer{position:sticky; bottom:0; background:var(--bg); padding:10px 0 4px; z-index:5}
   .composer .c-row{display:flex; gap:8px; align-items:flex-end}
   .composer select{width:auto; flex:0 0 140px}
   .composer textarea{flex:1; resize:vertical; min-height:46px}
-  .attach-btn{flex:0 0 auto; width:46px; height:46px; border-radius:12px; border:1px solid var(--border);
+  .attach-btn{flex:0 0 auto; width:44px; height:44px; border-radius:10px; border:1px solid var(--border);
     background:#fff; color:#667085; display:inline-flex; align-items:center; justify-content:center; padding:0}
-  .attach-btn:hover{background:var(--warm); border-color:#D6D3CB}
+  .attach-btn:hover{background:var(--soft2); border-color:var(--line)}
   .attach-btn svg{width:21px; height:21px; fill:currentColor}
   .attach-list{display:flex; flex-wrap:wrap; gap:7px; margin-top:8px}
-  .attach-chip{display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid var(--green-mid);
-    color:var(--green-dark); border-radius:999px; padding:4px 8px 4px 12px; font-size:.88rem; font-weight:600}
-  .attach-chip .x{width:22px; height:22px; border-radius:50%; border:none; background:var(--green-tint);
-    color:var(--green-dark); font-weight:800; padding:0; line-height:1}
-  .attach-progress{margin-top:8px; font-size:.9rem; color:var(--green-dark); font-weight:600}
+  .attach-chip{display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid var(--border);
+    color:#374151; border-radius:6px; padding:4px 8px 4px 12px; font-size:.88rem; font-weight:600}
+  .attach-chip .x{width:22px; height:22px; border-radius:50%; border:none; background:var(--soft);
+    color:#374151; font-weight:800; padding:0; line-height:1}
+  .attach-progress{margin-top:8px; font-size:.9rem; color:#374151; font-weight:600}
   .composer .task-fields{display:flex; gap:8px; margin-top:8px; flex-wrap:wrap}
   .composer .task-fields .grow{flex:1; min-width:170px}
   .composer .task-fields label{margin-top:0}
@@ -308,31 +314,31 @@
   .mention{color:#0a7bef; font-weight:700}
   .mention.mention-me{background:#e2efff; border-radius:5px; padding:0 3px; box-shadow:inset 0 0 0 1px #b7d6ff}
   .msg{transition:border-color .3s, box-shadow .3s, background-color .3s}
-  .msg.msg-highlight{border-color:#0a7bef; background:#f0f7ff; box-shadow:0 0 0 2px rgba(10,123,239,.35), var(--shadow-sm)}
+  .msg.msg-highlight{border-color:#0a7bef; background:#f0f7ff; box-shadow:0 0 0 2px rgba(10,123,239,.35)}
   .mention-box{position:absolute; left:0; bottom:100%; margin-bottom:6px; width:min(340px,100%);
-    background:#fff; border:1px solid var(--border); border-radius:16px; box-shadow:var(--shadow-lg);
+    background:#fff; border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow-lg);
     z-index:40; max-height:272px; overflow-y:auto; padding:6px}
   .mention-item{display:flex; align-items:center; gap:10px; width:100%; min-height:52px;
-    padding:5px 9px; border:none; background:#fff; border-radius:12px; text-align:left; cursor:pointer}
-  .mention-item:hover,.mention-item.active{background:var(--green-tint)}
+    padding:5px 9px; border:none; background:#fff; border-radius:10px; text-align:left; cursor:pointer}
+  .mention-item:hover,.mention-item.active{background:var(--soft)}
   .mention-item .m-main{display:flex; flex-direction:column; min-width:0}
   .mention-item .m-name{font-weight:700; line-height:1.25}
   .mention-item .m-title{color:var(--muted); font-size:.82rem; line-height:1.25}
 
   /* Công việc — bảng 4 cột */
   .filter-bar{display:flex; gap:8px; flex-wrap:wrap; margin-bottom:14px}
-  .filter-btn{min-height:40px; padding:7px 16px; border-radius:999px; border:1px solid var(--border);
+  .filter-btn{min-height:44px; padding:7px 16px; border-radius:999px; border:1px solid var(--border);
     background:#fff; font-weight:600; color:var(--muted)}
-  .filter-btn:hover{border-color:#D6D3CB; color:var(--text)}
-  .filter-btn.active{background:var(--green); color:#fff; border-color:var(--green)}
+  .filter-btn:hover{border-color:var(--line); color:var(--text)}
+  .filter-btn.active{background:#111827; color:#fff; border-color:#111827}
   .board{display:grid; grid-template-columns:1fr; gap:14px; align-items:start}
   @media (min-width:960px){ .board{grid-template-columns:repeat(4,1fr)} }
-  .board-col{background:#EDEBE6; border:1px solid rgba(236,233,226,.7); border-radius:var(--radius); padding:12px}
+  .board-col{background:#F3F4F6; border:1px solid var(--border); border-radius:var(--radius); padding:12px}
   .board-col h3{margin:2px 2px 10px; font-size:1rem; font-weight:800; display:flex; align-items:center; gap:8px; color:var(--text)}
   .board-col .col-empty{color:var(--muted); font-size:.9rem; padding:4px 2px 8px}
-  .task-card{background:var(--card); border:1px solid #F0EEE9; border-radius:var(--radius-sm);
-    padding:16px; margin-bottom:12px; box-shadow:var(--shadow-sm)}
-  .task-card.overdue{border:1.5px solid #FECDC2; background:#FFFBFA}
+  .task-card{background:var(--card); border:1px solid var(--border); border-radius:var(--radius-sm);
+    padding:16px; margin-bottom:12px}
+  .task-card.overdue{border:1.5px solid var(--danger-line); background:var(--danger-bg)}
   .task-card .t-title{font-weight:700; line-height:1.35}
   .task-card .t-desc{margin:6px 0; white-space:pre-wrap; word-break:break-word; font-size:.94rem}
   .task-card .t-meta{color:var(--muted); font-size:.86rem; margin-top:6px}
@@ -345,7 +351,7 @@
   @media (min-width:720px){ .form-grid{grid-template-columns:1fr 1fr} }
 
   /* Bình luận trong modal việc */
-  .comment-item{border-bottom:1px solid #F1EFE9; padding:9px 0}
+  .comment-item{border-bottom:1px solid #F3F4F6; padding:9px 0}
   .comment-item:last-child{border-bottom:none}
   .comment-item .c-head{font-size:.88rem; color:var(--muted)}
   .comment-item .c-head b{color:var(--text)}
@@ -354,8 +360,8 @@
   .comment-form textarea{flex:1}
 
   /* Nhân viên — quản trị */
-  .admin-item{background:var(--card); border:1px solid rgba(236,233,226,.7); border-radius:var(--radius);
-    padding:16px 18px; box-shadow:var(--shadow); margin-bottom:12px}
+  .admin-item{background:var(--card); border:1px solid var(--border); border-radius:var(--radius);
+    padding:16px 18px; margin-bottom:12px}
   .admin-item .a-head{display:flex; align-items:center; gap:11px; flex-wrap:wrap}
   .admin-item .a-name{font-weight:800}
   .admin-item .a-title{color:var(--muted); font-size:.9rem}
@@ -368,25 +374,25 @@
 
   /* Cài đặt */
   .settings-card{margin-bottom:16px}
-  .interval-card{border:1.5px solid var(--green-mid); background:linear-gradient(180deg,var(--green-tint),#ffffff)}
+  .interval-card{border:1px solid var(--border); background:var(--soft2)}
   .interval-card h2{margin-top:0; color:var(--text)}
   .interval-main{display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin:8px 0 4px}
   .interval-main input{width:150px; font-size:2rem; font-weight:800; text-align:center; padding:10px;
-    color:var(--green-dark); background:#fff; border-color:var(--green-mid); border-radius:14px}
+    color:var(--text); background:#fff; border-color:var(--border); border-radius:10px}
   .interval-main .unit{font-size:1.15rem; font-weight:700; color:var(--muted)}
-  .interval-main .btn{min-height:56px; padding:10px 26px; font-size:1.05rem}
-  .ok-text{color:var(--green-dark); font-weight:600}
+  .interval-main .btn{min-height:44px; padding:10px 18px; font-size:1.05rem}
+  .ok-text{color:var(--text); font-weight:600}
 
   /* Modal dùng chung */
   .modal-overlay{position:fixed; inset:0; background:rgba(26,29,33,.48); z-index:60;
     display:flex; align-items:flex-end; justify-content:center; padding:0}
   @media (min-width:720px){ .modal-overlay{align-items:center; padding:22px} }
   .modal-card{background:#fff; width:100%; max-width:580px; max-height:90vh; overflow-y:auto;
-    border-radius:20px 20px 0 0; padding:22px; position:relative; box-shadow:var(--shadow-lg)}
-  @media (min-width:720px){ .modal-card{border-radius:20px} }
-  .modal-close{position:absolute; top:12px; right:12px; width:38px; height:38px; border-radius:50%;
+    border-radius:12px 12px 0 0; padding:22px; position:relative; box-shadow:var(--shadow-lg)}
+  @media (min-width:720px){ .modal-card{border-radius:12px} }
+  .modal-close{position:absolute; top:12px; right:12px; width:40px; height:40px; border-radius:50%;
     border:1px solid var(--border); background:#fff; font-size:1.05rem; color:var(--muted); padding:0; z-index:2}
-  .modal-close:hover{color:var(--danger); border-color:#FECDCA}
+  .modal-close:hover{color:var(--danger); border-color:var(--danger-line)}
   .profile-head{display:flex; gap:14px; align-items:center; margin-bottom:6px; padding-right:40px}
   .profile-head .p-name{font-size:1.3rem; font-weight:800; line-height:1.25}
   .profile-head .p-title{color:var(--muted)}
@@ -395,48 +401,48 @@
   .profile-card dt{color:var(--muted); font-weight:600}
   .profile-card dd{margin:0; word-break:break-word}
   .profile-stats{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin-top:14px}
-  .profile-stats .ps{background:var(--warm); border:1px solid var(--border); border-radius:12px; padding:9px 6px; text-align:center}
+  .profile-stats .ps{background:var(--soft2); border:1px solid var(--border); border-radius:10px; padding:9px 6px; text-align:center}
   .profile-stats .ps b{display:block; font-size:1.25rem; color:var(--text)}
   .profile-stats .ps span{font-size:.76rem; color:var(--muted); font-weight:600}
   .profile-card h3{margin:18px 0 8px; font-size:1rem; color:var(--text)}
-  .mini-task{border:1px solid var(--border); border-radius:12px; padding:8px 11px; margin-bottom:7px;
+  .mini-task{border:1px solid var(--border); border-radius:10px; padding:8px 11px; margin-bottom:7px;
     display:flex; gap:8px; align-items:center; flex-wrap:wrap; background:#fff}
   .mini-task .mt-title{font-weight:600}
-  .link-btn{background:none; border:none; color:var(--green-dark); font-weight:700; padding:0; min-height:0}
+  .link-btn{background:none; border:none; color:var(--accent); font-weight:700; padding:0; min-height:0}
   .link-btn:hover{text-decoration:underline}
   .sub-list{display:flex; flex-wrap:wrap; gap:7px}
-  .sub-item{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:var(--warm);
-    border-radius:999px; padding:4px 11px 4px 5px; font-weight:600}
+  .sub-item{display:inline-flex; align-items:center; gap:7px; border:1px solid var(--border); background:var(--soft2);
+    border-radius:6px; padding:4px 11px 4px 5px; font-weight:600}
 
   /* Chip trạng thái của chính mình trên header */
-  .self-status{display:inline-flex; align-items:center; gap:6px; background:var(--green-tint);
-    border:1px solid var(--green-mid); color:var(--green-dark); border-radius:999px; padding:5px 11px;
+  .self-status{display:inline-flex; align-items:center; gap:6px; background:var(--soft);
+    border:1px solid var(--border); color:#374151; border-radius:999px; padding:5px 11px;
     font-size:.78rem; font-weight:600; white-space:nowrap; flex:0 1 auto; min-width:0;
     overflow:hidden; text-overflow:ellipsis}
   .self-status .dot{box-shadow:none; width:9px; height:9px}
   .self-avatar{display:inline-flex; flex:0 0 auto}
-  .self-avatar .avatar{box-shadow:0 0 0 2px #fff, var(--shadow-sm)}
+  .self-avatar .avatar{box-shadow:0 0 0 2px #fff}
 
   /* Dải hiện diện ngang (Tổng quan) */
   .presence-strip{display:flex; gap:10px; overflow-x:auto; padding:4px 2px 8px;
     -webkit-overflow-scrolling:touch; scrollbar-width:thin}
   .pstrip-item{flex:0 0 auto; width:118px; text-align:center; padding:12px 8px 10px;
-    border:1px solid transparent; border-radius:16px; background:var(--warm)}
+    border:1px solid transparent; border-radius:12px; background:var(--soft)}
   .pstrip-item.clickable:hover{border-color:var(--border); background:#fff}
   .pstrip-av{position:relative; width:44px; margin:0 auto 6px}
   .pstrip-av .avatar{margin:0 auto}
-  .pstrip-dot{position:absolute; right:-3px; bottom:-2px; box-shadow:0 0 0 2px var(--warm)}
+  .pstrip-dot{position:absolute; right:-3px; bottom:-2px; box-shadow:0 0 0 2px var(--soft)}
   .pstrip-name{font-weight:700; font-size:.9rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .pstrip-state{font-size:.78rem; font-weight:600; color:var(--muted); margin-top:1px;
     white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
-  .pstrip-state.on{color:var(--green-dark)}
+  .pstrip-state.on{color:#374151}
   .pstrip-sub{font-size:.72rem; color:var(--faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
   .pstrip-work{font-size:.74rem; color:var(--muted); margin-top:3px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 
   /* Chấm chỉ thị cột của bảng việc (chỉ hiện trên mobile) */
   .board-dots{display:none}
-  .bdot{width:8px; height:8px; border-radius:999px; border:none; background:#D6D3CB; padding:0; transition:all .2s}
-  .bdot.active{background:var(--green); width:22px}
+  .bdot{width:8px; height:8px; border-radius:999px; border:none; background:#D1D5DB; padding:0; transition:all .2s}
+  .bdot.active{background:#111827; width:22px}
 
   /* ================= MOBILE (<=760px): sidebar ẩn, tab thành thanh nổi dưới đáy kiểu app ================= */
   @media (max-width:760px){
@@ -449,8 +455,8 @@
     .card{padding:16px}
     label{font-size:.9rem; margin:10px 0 5px}
     .btn{min-height:44px; padding:8px 14px}
-    .btn.small{min-height:36px; padding:4px 10px; font-size:.85rem}
-    .btn.ghost{min-height:38px; padding:6px 12px}
+    .btn.small{min-height:40px; padding:8px 12px; font-size:.85rem}
+    .btn.ghost{min-height:44px; padding:10px 14px}
     .chip,.kind,.prio,.status-chip,.due-chip{font-size:.7rem; padding:2px 8px}
     .avatar{width:40px; height:40px; font-size:.98rem}
     .avatar.sm{width:34px; height:34px; font-size:.85rem}
@@ -460,7 +466,7 @@
     .error,.success{font-size:.9rem; padding:8px 10px}
     .hint{font-size:.88rem}
 
-    /* Header mỏng, nền ấm mờ */
+    /* Header mỏng */
     header.topbar{padding:8px 16px; gap:6px; justify-content:space-between}
     header.topbar .brand{display:flex}
     header.topbar .brand .brand-mark{width:32px; height:32px; border-radius:9px; font-size:16px}
@@ -468,21 +474,21 @@
     header.topbar .brand .brand-sub{display:none}
     header.topbar .userbox{gap:6px}
     header.topbar .who{display:none}
-    header.topbar .btn.ghost{min-height:36px; padding:4px 10px; font-size:.82rem}
-    .bell-btn{width:38px; height:38px; border-radius:11px}
+    header.topbar .btn.ghost{min-height:44px; padding:8px 12px; font-size:.82rem}
+    .bell-btn{width:44px; height:44px; border-radius:10px}
     .bell-btn svg{width:20px; height:20px}
     .bell-panel{top:46px; width:min(330px,92vw)}
     .bell-item{padding:9px 12px}
     .self-status{font-size:.68rem; padding:3px 8px; gap:5px}
     .self-avatar .avatar{width:32px; height:32px; font-size:.82rem}
 
-    /* Thanh điều hướng dưới: nổi, bo 20px, bóng lớn (như mẫu C) */
+    /* Thanh điều hướng dưới: nổi, bo 12px, bóng (1 trong 2 chỗ được giữ bóng) */
     nav.tabs{position:fixed; top:auto; left:12px; right:12px; bottom:calc(12px + env(safe-area-inset-bottom));
       z-index:45; flex-direction:row; gap:2px; padding:6px;
       background:rgba(255,255,255,.96); backdrop-filter:blur(16px); -webkit-backdrop-filter:blur(16px);
-      border:1px solid var(--border); border-radius:20px; box-shadow:0 12px 32px rgba(26,29,33,.14)}
+      border:1px solid var(--border); border-radius:12px; box-shadow:var(--shadow-lg)}
     nav.tabs .tab{flex:1 1 0; flex-direction:column; justify-content:center; gap:2px; min-height:56px;
-      padding:4px 2px; font-size:10px; font-weight:700; white-space:normal; text-align:center; line-height:1.15; border-radius:14px}
+      padding:4px 2px; font-size:10px; font-weight:700; white-space:normal; text-align:center; line-height:1.15; border-radius:10px}
     nav.tabs .tab svg{width:22px; height:22px}
     nav.tabs .tab .badge{position:absolute; top:2px; right:5px; margin:0;
       min-width:17px; height:17px; font-size:.64rem; padding:0 4px}
@@ -495,8 +501,6 @@
     /* Tổng quan */
     .stat-grid{gap:12px; margin-bottom:16px}
     .stat-card{padding:16px}
-    .stat-icon{width:38px; height:38px; border-radius:11px; margin-bottom:10px}
-    .stat-icon svg{width:20px; height:20px}
     .stat-card .stat-num{font-size:26px}
     .stat-card .stat-label{font-size:.85rem}
     .emp-grid{gap:12px}
@@ -542,15 +546,15 @@
     .att-file{padding:8px 10px; font-size:.9rem}
     .composer select{flex-basis:102px}
     .composer textarea{min-height:42px}
-    .attach-btn{width:42px; height:42px}
-    .composer .btn{min-height:42px; padding:8px 12px}
+    .attach-btn{width:44px; height:44px}
+    .composer .btn{min-height:44px; padding:8px 12px}
     .mention-box{width:100%; max-height:40vh}
 
     /* Công việc: vuốt ngang snap từng cột */
     .board{display:flex; overflow-x:auto; scroll-snap-type:x mandatory; gap:10px;
       margin:0 -16px; padding:2px 16px 10px; -webkit-overflow-scrolling:touch; scrollbar-width:none}
     .board::-webkit-scrollbar{display:none}
-    .board-col{flex:0 0 85%; scroll-snap-align:start; padding:10px; border-radius:18px}
+    .board-col{flex:0 0 85%; scroll-snap-align:start; padding:10px; border-radius:12px}
     .board-col h3{font-size:.92rem; margin-bottom:8px}
     .board-dots{display:flex; justify-content:center; gap:6px; margin-top:2px}
     .task-card{padding:12px; margin-bottom:8px}
@@ -568,12 +572,12 @@
     .interval-main{gap:10px}
     .interval-main input{width:104px; font-size:1.45rem; padding:8px}
     .interval-main .unit{font-size:1rem}
-    .interval-main .btn{min-height:48px; padding:8px 18px; font-size:.95rem}
+    .interval-main .btn{min-height:44px; padding:8px 14px; font-size:.95rem}
 
-    /* Modal = bottom sheet bo 20px */
+    /* Modal = bottom sheet bo 12px */
     .modal-card{max-height:92vh; padding:16px 14px calc(14px + env(safe-area-inset-bottom));
-      border-radius:20px 20px 0 0}
-    .modal-close{top:9px; right:9px; width:34px; height:34px}
+      border-radius:12px 12px 0 0}
+    .modal-close{top:9px; right:9px; width:40px; height:40px}
     .profile-head{gap:10px; padding-right:34px}
     .profile-head .p-name{font-size:1.12rem}
     .profile-card dl{font-size:.89rem; gap:5px 10px}
@@ -589,7 +593,7 @@
     body{font-size:15px}
 
     /* Header: ép 1 hàng — logo 36px, tiêu đề 1 dòng ellipsis ~16.5px,
-       chip hiện diện co giãn có ellipsis chủ đích, chuông 40px, avatar 34px,
+       chip hiện diện co giãn có ellipsis chủ đích, chuông 44px, avatar 34px,
        nút Đăng xuất 1 dòng nowrap */
     header.topbar{padding:8px 12px; gap:8px}
     header.topbar .brand{flex:0 1 auto; min-width:0; gap:8px}
@@ -599,9 +603,9 @@
     header.topbar .userbox{flex:1 1 auto; min-width:0; justify-content:flex-end; gap:6px}
     .self-status{max-width:44vw; font-size:11px; padding:4px 9px; gap:5px}
     .self-status .ss-text{overflow:hidden; text-overflow:ellipsis; white-space:nowrap; min-width:0}
-    .bell-btn{width:40px; height:40px; border-radius:11px}
+    .bell-btn{width:44px; height:44px; border-radius:10px}
     .self-avatar .avatar{width:34px; height:34px; font-size:.85rem}
-    #logoutBtn{white-space:nowrap; flex:0 0 auto; font-size:13.5px; padding:6px 10px; min-height:38px}
+    #logoutBtn{white-space:nowrap; flex:0 0 auto; font-size:13.5px; padding:8px 10px; min-height:44px}
 
     /* Panel thông báo: cố định trong khung màn hình (không tràn mép),
        cao tối đa 70vh, cuộn bên trong panel */
@@ -637,43 +641,42 @@
 
   /* ===== Bảo mật 2FA: cổng xác minh + thẻ bảo mật + trình bật 2FA ===== */
   #gateView{min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
-    background:linear-gradient(180deg,#F4F2ED 0%,#EDEBE6 100%)}
+    background:var(--bg)}
   #gateView .btn[type="submit"], #gateForm .btn.primary{width:100%; margin-top:16px}
   #gateCode{font-size:1.2rem; font-weight:700; letter-spacing:2px; text-align:center}
   .check-row{display:flex; align-items:center; gap:9px; font-weight:600; margin:14px 0 0; cursor:pointer; font-size:.95rem}
-  .check-row input{width:20px; height:20px; flex:0 0 auto; margin:0; accent-color:var(--green)}
+  .check-row input{width:20px; height:20px; flex:0 0 auto; margin:0; accent-color:var(--accent)}
   .tf-steps{display:flex; gap:6px; flex-wrap:wrap; margin:14px 40px 4px 0}
   .tf-step-chip{display:inline-flex; align-items:center; gap:7px; font-size:.8rem; font-weight:700;
-    color:var(--muted); background:#F2F4F7; border-radius:999px; padding:4px 11px 4px 5px}
-  .tf-step-chip .n{width:22px; height:22px; border-radius:50%; background:#D6D3CB; color:#fff;
+    color:var(--muted); background:#F3F4F6; border-radius:6px; padding:4px 11px 4px 5px}
+  .tf-step-chip .n{width:22px; height:22px; border-radius:50%; background:#D1D5DB; color:#fff;
     display:inline-flex; align-items:center; justify-content:center; font-size:.78rem; font-weight:800}
-  .tf-step-chip.active{background:var(--green-tint); color:var(--green-dark)}
-  .tf-step-chip.active .n{background:var(--green)}
-  .tf-step-chip.done{background:var(--green-tint); color:var(--green-dark)}
-  .tf-step-chip.done .n{background:var(--green-dark)}
+  .tf-step-chip.active{background:var(--soft); color:var(--text)}
+  .tf-step-chip.active .n{background:#111827}
+  .tf-step-chip.done{background:var(--soft); color:var(--text)}
+  .tf-step-chip.done .n{background:#111827}
   .tf-h{margin:16px 0 6px; font-size:1.05rem; color:var(--text)}
-  .tf-secret{font-size:1.08rem; background:var(--warm); border:1px dashed #D6D3CB; border-radius:12px;
+  .tf-secret{font-size:1.08rem; background:var(--soft2); border:1px dashed #D1D5DB; border-radius:10px;
     padding:13px 10px; text-align:center; word-break:break-all; letter-spacing:2px; font-weight:700; margin:10px 0 4px}
   .tf-qr{display:flex; justify-content:center; padding:8px 0 2px}
-  .tf-qr canvas{background:#fff; border:1px solid var(--border); border-radius:14px; box-shadow:var(--shadow-sm)}
+  .tf-qr canvas{background:#fff; border:1px solid var(--border); border-radius:10px}
   .tf-codes{display:grid; grid-template-columns:1fr 1fr; gap:8px; margin:12px 0 4px}
-  .tf-code{background:var(--warm); border:1px solid var(--border); border-radius:10px; padding:10px 6px;
+  .tf-code{background:var(--soft2); border:1px solid var(--border); border-radius:10px; padding:10px 6px;
     text-align:center; font-weight:800; letter-spacing:1.5px; font-size:1.02rem}
   .tf-nav{display:flex; gap:10px; margin-top:18px}
   .tf-nav .btn{flex:1}
 
   /* ===== Phase 1 (24/10): tính năng mới phải dùng tốt trên mobile ngay từ
      đầu — không redesign, chỉ sửa điểm nghẽn cảm ứng của đúng các bề mặt mới:
-     nút duyệt/từ chối/xác nhận đủ 44px để bấm bằng ngón tay (nút small mặc
-     định trên mobile chỉ 36px); lưới 6 ô thống kê hồ sơ xếp 3 cột cho khỏi
-     bóp chữ; checkbox mới không bị luật input width:100% kéo giãn. ===== */
+     nút duyệt/từ chối/xác nhận đủ 44px để bấm bằng ngón tay;
+     lưới 6 ô thống kê hồ sơ xếp 3 cột cho khỏi bóp chữ; checkbox mới không bị luật input width:100% kéo giãn. ===== */
   @media (max-width:760px){
     #approvalList .btn, .task-card [data-ack], #taskBody [data-ack],
     #profileBody .btn, #decisionsLoadBtn{min-height:44px; padding:10px 14px}
     .profile-stats{grid-template-columns:repeat(3,1fr)}
     #approvalList input[type="checkbox"], #taskForm input[type="checkbox"],
     #taskBody input[type="checkbox"]{width:22px; height:22px; flex:0 0 auto;
-      margin:0; vertical-align:middle; accent-color:var(--green)}
+      margin:0; vertical-align:middle; accent-color:var(--accent)}
   }
 </style>
 </head>
