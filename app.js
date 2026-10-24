@@ -21,6 +21,9 @@
     messages: [],
     tasks: [],
     activities: [],
+    decisions: [],        // nhật ký quyết định đã tải (phase 1: chỉ tải khi bấm nút, không nghe trực tiếp để tiết kiệm lượt đọc Firestore)
+    decisionsLoaded: false,
+    decisionsLoading: false,
     checkIntervalMinutes: 10,
     checkinTimer: null,
     lastCheckinAt: 0,      // mốc check-in thành công gần nhất của chính mình (lạc quan, tại máy này)
@@ -313,6 +316,27 @@
     }).catch(function (e) { console.warn("log activity:", e); });
   }
 
+  /* ---------- Nhật ký quyết định (phase 1, append-only) ----------
+     Collection riêng "decisions": mỗi quyết định duyệt / trả lại / hoàn thành
+     ghi 1 bản ghi kèm lý do + thời gian. Ghi fire-and-forget SAU khi đổi
+     trạng thái việc thành công — nếu ghi log thất bại (vd Rules chưa mở
+     collection này) thì việc vẫn đổi trạng thái bình thường, chỉ báo console. */
+  function logDecision(action, t, reason) {
+    if (!db || !state.me || !t) return;
+    db.collection("decisions").add({
+      actorId: state.me.id,
+      actorName: state.me.name,
+      action: action,
+      targetType: "task",
+      targetId: t.id,
+      targetTitle: t.title || "",
+      assigneeId: t.assigneeId || "",
+      assigneeName: empName(t.assigneeId),
+      reason: reason || "",
+      createdAt: serverTimestamp()
+    }).catch(function (e) { console.warn("log decision:", e); });
+  }
+
   /* ---------- Khởi tạo Firebase ---------- */
   function initFirebase() {
     if (!CONFIGURED) {
@@ -529,7 +553,9 @@
         });
         renderTasks();
         renderOverview();
-        renderApproval();
+        /* Không dựng lại Hộp duyệt khi người duyệt đang gõ lý do (tránh mất chữ đang nhập) */
+        var aeAp = document.activeElement;
+        if (!(aeAp && aeAp.closest && aeAp.closest("#approvalList"))) renderApproval();
         renderBell();
         renderTaskModalIfOpen();
       }, function (e) { console.warn("tasks listener:", e); })
@@ -1312,7 +1338,7 @@
     });
   }
 
-  function setTaskStatus(t, newStatus) {
+  function setTaskStatus(t, newStatus, reason, action) {
     if (!db || !t) return Promise.resolve();
     return db.collection("tasks").doc(t.id).update({
       status: newStatus, updatedAt: serverTimestamp()
@@ -1322,6 +1348,11 @@
       } else {
         logActivity("đã chuyển việc “" + (t.title || "") + "” sang trạng thái " + newStatus, "task");
       }
+      /* Ghi nhật ký quyết định: Duyệt/Trả lại từ Hộp duyệt có lý do bắt buộc;
+         đổi nhanh bằng dropdown trên bảng mà ra Hoàn thành thì vẫn ghi log
+         nhưng lý do để trống (hiển thị "không ghi lý do", không bịa lý do). */
+      if (action) logDecision(action, t, reason || "");
+      else if (newStatus === "Hoàn thành") logDecision("Hoàn thành", t, "");
     }).catch(function (e) { console.warn("update task status:", e); });
   }
 
@@ -1366,6 +1397,7 @@
           (t.description ? '<div class="t-desc">' + esc(t.description) + "</div>" : "") +
           '<div class="t-tags"><span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" +
             dueChipHtml(t) +
+            (t.role ? '<span class="chip role">' + esc(t.role) + "</span>" : "") +
             '<button class="chip" type="button" data-taskopen="' + esc(t.id) + '" style="cursor:pointer">Bình luận: ' + commentCount(t) + "</button></div>" +
           '<div class="t-meta">Phụ trách: <b>' + esc(empName(t.assigneeId)) + "</b> · Giao bởi: " + esc(empName(t.assignerId)) +
           (t.updatedAt ? " · Cập nhật: " + esc(fmtTime(t.updatedAt)) : "") + "</div>" +
@@ -1422,6 +1454,7 @@
     errBox.classList.add("hidden");
     var title = $("taskTitle").value.trim();
     var assignee = $("taskAssignee").value;
+    var jobRole = $("taskRole") ? $("taskRole").value.trim() : "";
     if (!title) return;
     if (!assignee) {
       errBox.textContent = "Chưa có nhân viên nào để giao việc. Hãy đăng ký hồ sơ nhân viên trước.";
@@ -1436,6 +1469,7 @@
       assignerId: state.me.id,
       status: "Chờ nhận",
       priority: $("taskPriority").value,
+      role: jobRole,
       resultNote: "",
       dueAt: due,
       comments: [],
@@ -1445,6 +1479,7 @@
       $("taskTitle").value = "";
       $("taskDesc").value = "";
       $("taskDue").value = "";
+      if ($("taskRole")) $("taskRole").value = "";
       logActivity("đã tạo việc “" + title + "” giao cho " + empName(assignee), "task");
     }).catch(function (e) {
       errBox.textContent = "Tạo công việc thất bại. Vui lòng thử lại.";
@@ -1470,7 +1505,7 @@
   function renderTaskModalIfOpen() {
     if (!state.taskModalId) return;
     var ae = document.activeElement;
-    if (ae && (ae.id === "tmCommentInput" || ae.id === "tmNote")) return;
+    if (ae && (ae.id === "tmCommentInput" || ae.id === "tmNote" || ae.id === "tmRole")) return;
     if (!findTask(state.taskModalId)) { closeTask(); return; }
     renderTaskBody();
   }
@@ -1496,6 +1531,7 @@
       "<dl>" +
         "<dt>Phụ trách</dt><dd>" + esc(empName(t.assigneeId)) + "</dd>" +
         "<dt>Người giao</dt><dd>" + esc(empName(t.assignerId)) + "</dd>" +
+        "<dt>Vai trò của job</dt><dd>" + (t.role ? esc(t.role) : "— (dùng vai trò hồ sơ)") + "</dd>" +
         "<dt>Hạn hoàn thành</dt><dd>" + (t.dueAt ? esc(fmtDate(t.dueAt)) : "Chưa đặt") + "</dd>" +
         "<dt>Tạo lúc</dt><dd>" + esc(fmtTime(t.createdAt)) + "</dd>" +
         "<dt>Cập nhật</dt><dd>" + esc(fmtTime(t.updatedAt)) + "</dd>" +
@@ -1505,11 +1541,12 @@
       '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
         '<div style="flex:1;min-width:150px"><label for="tmStatus" style="margin-top:0">Trạng thái</label><select id="tmStatus">' + statusOpts + "</select></div>" +
         '<div style="flex:1;min-width:150px"><label for="tmDue" style="margin-top:0">Hạn hoàn thành</label><input type="date" id="tmDue" value="' + esc(timestampToDateInput(t.dueAt)) + '"></div>' +
+        '<div style="flex:1;min-width:150px"><label for="tmRole" style="margin-top:0">Vai trò của job</label><input type="text" id="tmRole" value="' + esc(t.role || "") + '" placeholder="VD: QA, Editor…"></div>' +
       "</div>" +
       '<label for="tmNote">Ghi chú kết quả</label>' +
       '<textarea id="tmNote" rows="2" placeholder="Ghi chú kết quả...">' + esc(t.resultNote || "") + "</textarea>" +
       '<div style="margin-top:10px"><button class="btn primary small" type="button" id="tmSave">Lưu thay đổi</button> ' +
-      '<span id="tmMsg" class="ok-text hidden">Đã lưu.</span></div>' +
+      '<span id="tmMsg" class="ok-text hidden">Đã lưu.</span> <span id="tmErr" class="hidden" style="color:#b3261e"></span></div>' +
       "<h3>Bình luận (" + comments.length + ")</h3>" +
       '<div id="tmComments">' + commentsHtml + "</div>" +
       '<div class="comment-form"><textarea id="tmCommentInput" rows="2" placeholder="Viết bình luận..."></textarea>' +
@@ -1517,18 +1554,32 @@
 
     $("tmSave").addEventListener("click", function () {
       var newStatus = $("tmStatus").value;
+      var noteVal = $("tmNote").value;
+      var roleVal = $("tmRole") ? $("tmRole").value.trim() : "";
+      var statusChanged = newStatus !== t.status;
+      /* Chốt hoàn thành phải ghi lý do — Ghi chú kết quả chính là lý do. */
+      if (statusChanged && newStatus === "Hoàn thành" && !noteVal.trim()) {
+        var er = $("tmErr");
+        if (er) { er.textContent = "Chốt hoàn thành cần ghi lý do vào Ghi chú kết quả."; er.classList.remove("hidden"); }
+        return;
+      }
       var patch = {
-        resultNote: $("tmNote").value,
+        resultNote: noteVal,
+        role: roleVal,
         dueAt: dateInputToTimestamp($("tmDue").value),
         updatedAt: serverTimestamp()
       };
-      var statusChanged = newStatus !== t.status;
       if (statusChanged) patch.status = newStatus;
       db.collection("tasks").doc(t.id).update(patch).then(function () {
         var msg = $("tmMsg");
         if (msg) { msg.classList.remove("hidden"); setTimeout(function () { msg.classList.add("hidden"); }, 2000); }
+        var er2 = $("tmErr");
+        if (er2) er2.classList.add("hidden");
         if (statusChanged) {
-          if (newStatus === "Hoàn thành") logActivity("đã hoàn thành việc “" + (t.title || "") + "”", "task");
+          if (newStatus === "Hoàn thành") {
+            logActivity("đã hoàn thành việc “" + (t.title || "") + "”", "task");
+            logDecision("Hoàn thành", t, noteVal.trim());
+          }
           else logActivity("đã chuyển việc “" + (t.title || "") + "” sang trạng thái " + newStatus, "task");
         }
       }).catch(function (e) { console.warn("task modal save:", e); });
@@ -1628,6 +1679,19 @@
     }).join("");
   }
 
+  /* Hộp duyệt (phase 1, kiểu Inbox): việc Chờ duyệt, mỗi mục có ô lý do +
+     nút Duyệt / Trả lại, cộng nút Duyệt tất cả dùng 1 lý do chung.
+     Lý do là bắt buộc — quyết định nào cũng phải ghi lý do vào nhật ký. */
+  function showApprovalError(text) {
+    var el = $("apError");
+    if (!el) return;
+    el.textContent = text;
+    el.classList.remove("hidden");
+  }
+  function hideApprovalError() {
+    var el = $("apError");
+    if (el) el.classList.add("hidden");
+  }
   function renderApproval() {
     var sec = $("approvalSection"), box = $("approvalList");
     if (!sec || !box) return;
@@ -1638,12 +1702,37 @@
     }
     var list = state.tasks.filter(function (t) { return t.status === "Chờ duyệt"; });
     sec.classList.toggle("hidden", !list.length);
-    box.innerHTML = list.map(function (t) {
+    if (!list.length) { box.innerHTML = ""; return; }
+    var html =
+      '<p class="hint">Mỗi quyết định cần ghi lý do — lý do lưu vào Nhật ký quyết định để nhân viên thấy được.</p>' +
+      '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">' +
+        '<div style="flex:1;min-width:200px"><label for="apAllReason" style="margin-top:0">Lý do chung khi duyệt tất cả</label>' +
+        '<input type="text" id="apAllReason" placeholder="Ví dụ: Đã kiểm tra, đạt yêu cầu"></div>' +
+        '<button class="btn primary small" type="button" id="apApproveAll">Duyệt tất cả (' + list.length + ")</button>" +
+      "</div>" +
+      '<p id="apError" class="hidden" style="color:#b3261e"></p>';
+    html += list.map(function (t) {
       return '<div class="approval-item"><div class="ap-title">' + esc(t.title || "") +
-        '<div class="ap-meta">Phụ trách: ' + esc(empName(t.assigneeId)) + " · Giao bởi: " + esc(empName(t.assignerId)) + "</div></div>" +
+        '<div class="ap-meta">Phụ trách: ' + esc(empName(t.assigneeId)) + " · Giao bởi: " + esc(empName(t.assignerId)) +
+        (t.role ? " · Vai trò job: " + esc(t.role) : "") + "</div></div>" +
+        '<div style="flex:1;min-width:200px"><input type="text" id="apReason-' + esc(t.id) + '" placeholder="Lý do duyệt / trả lại (bắt buộc)"></div>' +
         '<button class="btn primary small" type="button" data-approve="' + esc(t.id) + '">Duyệt — Hoàn thành</button>' +
         '<button class="btn ghost small" type="button" data-return="' + esc(t.id) + '">Trả lại — Đang làm</button></div>';
     }).join("");
+    box.innerHTML = html;
+    var allBtn = $("apApproveAll");
+    if (allBtn) allBtn.addEventListener("click", function () {
+      var reason = $("apAllReason") ? $("apAllReason").value.trim() : "";
+      if (!reason) { showApprovalError("Duyệt tất cả cần ghi lý do chung."); var inp = $("apAllReason"); if (inp) inp.focus(); return; }
+      hideApprovalError();
+      allBtn.disabled = true;
+      var chain = Promise.resolve();
+      list.forEach(function (t) {
+        chain = chain.then(function () { return setTaskStatus(t, "Hoàn thành", reason, "Duyệt"); });
+      });
+      chain.then(function () { allBtn.disabled = false; if (document.activeElement === allBtn && allBtn.blur) allBtn.blur(); renderApproval(); })
+        .catch(function () { allBtn.disabled = false; });
+    });
   }
 
   function renderActivities() {
@@ -1658,6 +1747,51 @@
         "<span>" + esc(a.text || "") + "</span>" +
         '<span class="a-time">' + esc(relText(a.createdAt)) + "</span></div>";
     }).join("");
+  }
+
+  /* ---------- Nhật ký quyết định (phase 1) ----------
+     KHÔNG dùng onSnapshot: chỉ tải 1 lần khi bấm nút (get + limit 50),
+     để không cộng thêm lượt đọc thường trực vào quota Firestore gói miễn phí. */
+  function decisionActionText(action) {
+    if (action === "Duyệt") return "đã duyệt";
+    if (action === "Trả lại") return "đã trả lại";
+    if (action === "Hoàn thành") return "đã hoàn thành";
+    return action || "—";
+  }
+  function renderDecisions() {
+    var box = $("decisionsList"), st = $("decisionsStatus");
+    if (!box) return;
+    if (!state.decisions.length) {
+      box.innerHTML = '<p class="hint" style="padding:10px 0">Chưa có quyết định nào được ghi nhận.</p>';
+      if (st) st.textContent = state.decisionsLoaded ? "Đã tải: 0 quyết định." : "";
+      return;
+    }
+    box.innerHTML = state.decisions.map(function (d) {
+      return '<div class="activity-item"><span class="a-actor">' + esc(d.actorName || "") + "</span>" +
+        "<span>" + esc(decisionActionText(d.action)) + " việc “" + esc(d.targetTitle || "") + "”" +
+        (d.assigneeName ? " (phụ trách: " + esc(d.assigneeName) + ")" : "") +
+        " — lý do: " + esc(d.reason ? d.reason : "không ghi lý do") + "</span>" +
+        '<span class="a-time">' + esc(relText(d.createdAt)) + "</span></div>";
+    }).join("");
+    if (st) st.textContent = "Đã tải " + state.decisions.length + " quyết định mới nhất.";
+  }
+  function loadDecisions() {
+    if (!db || state.decisionsLoading) return;
+    state.decisionsLoading = true;
+    var st = $("decisionsStatus");
+    if (st) st.textContent = "Đang tải…";
+    db.collection("decisions").orderBy("createdAt", "desc").limit(50).get().then(function (snap) {
+      state.decisions = snap.docs.map(function (d) {
+        var o = d.data(); o.id = d.id; return o;
+      });
+      state.decisionsLoaded = true;
+      state.decisionsLoading = false;
+      renderDecisions();
+    }).catch(function (e) {
+      state.decisionsLoading = false;
+      if (st) st.textContent = "Tải thất bại — có thể Firestore Rules chưa mở collection “decisions”. Thử lại sau.";
+      console.warn("load decisions:", e);
+    });
   }
 
   /* ---------- Sơ đồ tổ chức ---------- */
@@ -2025,6 +2159,13 @@
     var done = myTasks.filter(function (t) { return t.status === "Hoàn thành"; }).length;
     var given = state.tasks.filter(function (t) { return t.assignerId === e.id; }).length;
     var sent = state.messages.filter(function (m) { return m.senderId === e.id; }).length;
+    /* Phase 1 — thống kê thật từ dữ liệu đã nạp, không số liệu giả: */
+    var openTasks = myTasks.filter(function (t) { return t.status !== "Hoàn thành"; });
+    var jobRoles = [];
+    openTasks.forEach(function (t) { if (t.role && jobRoles.indexOf(t.role) === -1) jobRoles.push(t.role); });
+    var reviewCount = myTasks.filter(function (t) { return t.status === "Chờ duyệt"; }).length;
+    var commentCount = 0;
+    state.tasks.forEach(function (t) { (t.comments || []).forEach(function (c) { if (c.authorId === e.id) commentCount++; }); });
     var p = presenceOf(e);
     var act = lastActivityOf(e);
 
@@ -2038,11 +2179,20 @@
     var tasksHtml = myTasks.length
       ? myTasks.map(function (t) {
           return '<div class="mini-task"><span class="mt-title">' + esc(t.title || "") + "</span>" +
+            (t.role ? '<span class="chip role">' + esc(t.role) + "</span>" : "") +
             '<span class="' + statusChipClass(t.status) + '">' + esc(t.status) + "</span>" +
             '<span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" +
             '<button class="link-btn" type="button" data-taskopen="' + esc(t.id) + '" style="margin-left:auto">Mở việc</button></div>';
         }).join("")
       : '<p class="hint">Chưa được giao việc nào.</p>';
+
+    /* Ô sửa luật làm việc: chỉ Giám đốc / Phó giám đốc thấy. */
+    var guidanceEditHtml = "";
+    if (canManage()) {
+      guidanceEditHtml = '<div style="margin-top:8px"><textarea id="guidanceInput" rows="3" placeholder="Luật làm việc của nhân viên này, ví dụ: chỉ nhận việc có mô tả rõ, báo cáo mỗi tối…">' + esc(e.guidance || "") + "</textarea>" +
+        '<div style="margin-top:8px"><button class="btn primary small" type="button" id="guidanceSave">Lưu luật làm việc</button> ' +
+        '<span id="guidanceMsg" class="ok-text hidden">Đã lưu.</span></div></div>';
+    }
 
     box.innerHTML =
       '<div class="profile-head">' + avatarHtml(e, "lg") +
@@ -2057,6 +2207,16 @@
         "<dt>Chức vụ</dt><dd>" + esc(e.title || "—") + "</dd>" +
         "<dt>Cấp bậc</dt><dd>" + esc(e.level || "—") + "</dd>" +
         "<dt>Vai trò</dt><dd>" + esc(e.role || "—") + "</dd>" +
+        "<dt>Vai trò theo job hiện tại</dt><dd>" + (jobRoles.length
+          ? jobRoles.map(function (r) { return '<span class="chip role">' + esc(r) + "</span>"; }).join(" ")
+          : "Chưa gắn vai trò theo job — dùng vai trò hồ sơ: " + esc(e.role || "—")) + "</dd>" +
+        "<dt>Luật làm việc</dt><dd>" + (e.guidance
+          ? "<div style='white-space:pre-wrap;word-break:break-word'>" + esc(e.guidance) + "</div>"
+          : "chưa có dữ liệu") + guidanceEditHtml + "</dd>" +
+        "<dt>Kiểm tra phòng gần nhất</dt><dd>" + (e.lastCheckAt
+          ? esc(fmtTime(e.lastCheckAt)) + " (" + esc(fmtRel(e.lastCheckAt)) + " trước)"
+          : "Chưa từng kiểm tra") + "</dd>" +
+        "<dt>Chi phí / chuyển đổi</dt><dd>chưa có dữ liệu</dd>" +
         "<dt>Hiện diện</dt><dd>" + esc(p.label) + (p.sub ? " · " + esc(p.sub) : "") + "</dd>" +
         "<dt>Đang làm</dt><dd>" + esc(e.currentWork || "—") + "</dd>" +
         "<dt>Cấp trên</dt><dd>" + (mgr
@@ -2077,9 +2237,21 @@
         '<div class="ps"><b>' + done + "</b><span>Việc hoàn thành</span></div>" +
         '<div class="ps"><b>' + given + "</b><span>Việc đã giao</span></div>" +
         '<div class="ps"><b>' + sent + "</b><span>Tin đã gửi</span></div>" +
+        '<div class="ps"><b>' + reviewCount + "</b><span>Việc chờ duyệt</span></div>" +
+        '<div class="ps"><b>' + commentCount + "</b><span>Bình luận đã gửi</span></div>" +
       "</div>" +
       "<h3>Cấp dưới (" + subs.length + ")</h3>" + subsHtml +
       "<h3>Công việc được giao (" + myTasks.length + ")</h3>" + tasksHtml;
+
+    var gSave = $("guidanceSave");
+    if (gSave) gSave.addEventListener("click", function () {
+      var val = $("guidanceInput") ? $("guidanceInput").value.trim() : "";
+      db.collection("employees").doc(e.id).update({ guidance: val }).then(function () {
+        var m = $("guidanceMsg");
+        if (m) { m.classList.remove("hidden"); setTimeout(function () { m.classList.add("hidden"); }, 2000); }
+        renderProfile();
+      }).catch(function (err) { console.warn("save guidance:", err); });
+    });
   }
 
   /* ---------- Cài đặt ---------- */
@@ -3033,13 +3205,27 @@
     var ap = t.closest("[data-approve]");
     if (ap) {
       var ta = findTask(ap.getAttribute("data-approve"));
-      if (ta) setTaskStatus(ta, "Hoàn thành");
+      if (ta) {
+        var rin = $("apReason-" + ta.id);
+        var reason = rin ? rin.value.trim() : "";
+        if (!reason) { showApprovalError("Duyệt cần ghi lý do cho việc “" + (ta.title || "") + "”."); if (rin) rin.focus(); return; }
+        hideApprovalError();
+        setTaskStatus(ta, "Hoàn thành", reason, "Duyệt");
+        if (ap.blur) ap.blur();
+      }
       return;
     }
     var rt = t.closest("[data-return]");
     if (rt) {
       var tr = findTask(rt.getAttribute("data-return"));
-      if (tr) setTaskStatus(tr, "Đang làm");
+      if (tr) {
+        var rin2 = $("apReason-" + tr.id);
+        var reason2 = rin2 ? rin2.value.trim() : "";
+        if (!reason2) { showApprovalError("Trả lại cần ghi lý do cho việc “" + (tr.title || "") + "”."); if (rin2) rin2.focus(); return; }
+        hideApprovalError();
+        setTaskStatus(tr, "Đang làm", reason2, "Trả lại");
+        if (rt.blur) rt.blur();
+      }
       return;
     }
     var gm = t.closest("[data-goto-msg]");
@@ -3123,6 +3309,8 @@
     });
     $("tfFinish").addEventListener("click", onTfFinish);
     $("bellBtn").addEventListener("click", toggleBell);
+    var decBtn = $("decisionsLoadBtn");
+    if (decBtn) decBtn.addEventListener("click", loadDecisions);
     $("profileClose").addEventListener("click", closeProfile);
     $("taskClose").addEventListener("click", closeTask);
     $("profileModal").addEventListener("click", function (ev) {
