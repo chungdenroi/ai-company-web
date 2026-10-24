@@ -558,7 +558,7 @@
     .task-card .t-desc{font-size:.88rem}
     .task-card .t-meta{font-size:.8rem}
     .filter-bar{gap:6px; margin-bottom:10px}
-    .filter-btn{min-height:36px; padding:5px 13px; font-size:.88rem}
+    .filter-btn{min-height:44px; padding:5px 13px; font-size:.88rem}
 
     /* Nhân viên — quản trị */
     .admin-item{padding:12px 13px; margin-bottom:10px}
@@ -771,6 +771,7 @@
     <!-- Tab Tổng quan -->
     <section id="tab-overview" class="tabpane">
       <div id="pinBannerOverview"></div>
+      <div id="ackOverdueBanner" class="hidden"></div>
       <div class="stat-grid">
         <div class="stat-card"><div class="stat-icon g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 6.6M17.5 14.2a6.5 6.5 0 0 1 4 5.8"/></svg></div><div class="stat-num" id="statTotal">0</div><div class="stat-label">Tổng nhân viên</div></div>
         <div class="stat-card"><div class="stat-icon b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="stat-num" id="statActive">0</div><div class="stat-label">Đang hoạt động</div></div>
@@ -886,6 +887,7 @@
         <button class="filter-btn active" data-filter="all" type="button">Tất cả</button>
         <button class="filter-btn" data-filter="mine" type="button">Việc của tôi</button>
         <button class="filter-btn" data-filter="overdue" type="button">Quá hạn</button>
+        <button class="filter-btn" data-filter="ackoverdue" type="button">Quá hạn xác nhận</button>
       </div>
       <div id="taskBoard" class="board"></div>
       <div id="boardDots" class="board-dots"></div>
@@ -963,6 +965,18 @@
         </div>
         <p id="intervalMsg" class="ok-text hidden"></p>
         <p class="hint" id="intervalHint">Chỉ Giám đốc mới sửa được chu kỳ này. Nhân viên đang mở trang sẽ tự động check-in (ghi nhận lần kiểm tra) đúng theo chu kỳ đang cài.</p>
+      </div>
+
+      <div class="card settings-card interval-card">
+        <h2>Thời gian chờ xác nhận nhận việc</h2>
+        <p style="margin:0 0 6px"><b>Áp dụng cho tất cả nhân viên</b> — việc đã giao mà quá số giờ này vẫn chưa xác nhận sẽ bị đánh dấu “Quá hạn xác nhận” ở tab Công việc, chuông thông báo và hồ sơ nhân viên.</p>
+        <div class="interval-main">
+          <input type="number" id="ackTimeoutInput" min="1" max="168" step="1" value="24" aria-label="Số giờ chờ xác nhận">
+          <span class="unit">giờ / lần</span>
+          <button id="ackTimeoutSave" class="btn primary" type="button">Lưu cài đặt</button>
+        </div>
+        <p id="ackTimeoutMsg" class="ok-text hidden"></p>
+        <p class="hint">Chỉ Giám đốc mới sửa được ngưỡng này. Mặc định 24 giờ.</p>
       </div>
 
       <div class="card settings-card">
