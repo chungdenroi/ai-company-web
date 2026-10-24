@@ -678,6 +678,27 @@
     #taskBody input[type="checkbox"]{width:22px; height:22px; flex:0 0 auto;
       margin:0; vertical-align:middle; accent-color:var(--accent)}
   }
+
+  /* ===== Trung tâm điều phối — Phần 1: app shell + Hộp thư (M06) ===== */
+  .inbox-group{margin-bottom:20px}
+  .inbox-group h3{margin:0 0 8px; font-size:1rem; font-weight:800}
+  .inbox-item{display:flex; gap:10px; align-items:flex-start; width:100%; text-align:left;
+    background:var(--card); border:1px solid var(--border); border-radius:12px;
+    padding:12px 14px; margin-bottom:8px}
+  .inbox-item:hover{border-color:var(--line)}
+  .inbox-item .i-text{flex:1; min-width:0; font-size:.95rem}
+  .inbox-item .i-sub{color:var(--muted); font-size:.86rem; margin-top:1px}
+  .more-menu{position:fixed; left:8px; right:8px; bottom:calc(92px + env(safe-area-inset-bottom));
+    z-index:44; background:#fff; border:1px solid var(--border); border-radius:12px;
+    box-shadow:var(--shadow-lg); padding:8px}
+  .more-menu .more-title{font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+    color:var(--faint); padding:6px 10px 4px}
+  .more-item{display:flex; align-items:center; width:100%; min-height:44px; padding:8px 12px;
+    border:none; background:transparent; border-radius:10px; font-size:15px; font-weight:600;
+    color:var(--text); text-align:left}
+  .more-item:hover{background:var(--soft)}
+  @media (max-width:760px){ nav.tabs .tab-overflow{display:none} }
+  @media (min-width:761px){ nav.tabs .tab-more{display:none} #moreMenu{display:none !important} }
 </style>
 </head>
 <body>
@@ -743,12 +764,21 @@
 
   <nav class="tabs" id="tabBar">
     <button class="tab active" data-tab="overview" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9 21v-6h6v6"/></svg>Tổng quan</button>
-    <button class="tab" data-tab="org" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/></svg>Sơ đồ tổ chức</button>
-    <button class="tab" data-tab="room" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.6L3 21l1.9-5.6A8.5 8.5 0 1 1 21 11.5Z"/></svg>Phòng họp<span id="unreadBadge" class="badge hidden">0</span></button>
     <button class="tab" data-tab="tasks" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="10" rx="1.5"/></svg>Công việc</button>
-    <button class="tab" data-tab="employees" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 6.6M17.5 14.2a6.5 6.5 0 0 1 4 5.8"/></svg>Nhân viên</button>
-    <button class="tab" data-tab="settings" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.23.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"/></svg>Cài đặt</button>
+    <button class="tab" data-tab="inbox" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>Hộp thư<span id="inboxBadge" class="badge hidden">0</span></button>
+    <button class="tab" data-tab="room" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5a8.5 8.5 0 0 1-12.4 7.6L3 21l1.9-5.6A8.5 8.5 0 1 1 21 11.5Z"/></svg>Phòng họp<span id="unreadBadge" class="badge hidden">0</span></button>
+    <button class="tab tab-overflow" data-tab="org" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="6" rx="1.5"/><rect x="2" y="16" width="6" height="6" rx="1.5"/><rect x="16" y="16" width="6" height="6" rx="1.5"/><path d="M12 8v4M5 16v-2a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v2"/></svg>Sơ đồ tổ chức</button>
+    <div class="nav-label">Kiểm soát</div>
+    <button class="tab tab-overflow" data-tab="employees" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 6.6M17.5 14.2a6.5 6.5 0 0 1 4 5.8"/></svg>Nhân viên</button>
+    <button class="tab tab-overflow" data-tab="settings" type="button"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.51 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.23.6.86 1 1.51 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51 1Z"/></svg>Cài đặt</button>
+    <button class="tab tab-more" data-tab="more" type="button"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>Thêm</button>
   </nav>
+    <div id="moreMenu" class="more-menu hidden">
+      <div class="more-title">Thêm</div>
+      <button class="more-item" type="button" data-more-goto="org">Sơ đồ tổ chức</button>
+      <button class="more-item" type="button" data-more-goto="employees">Nhân viên</button>
+      <button class="more-item" type="button" data-more-goto="settings">Cài đặt</button>
+    </div>
     </aside>
     <div class="shell-main">
   <header class="topbar">
@@ -776,10 +806,10 @@
       <div id="pinBannerOverview"></div>
       <div id="ackOverdueBanner" class="hidden"></div>
       <div class="stat-grid">
-        <div class="stat-card"><div class="stat-icon g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 6.6M17.5 14.2a6.5 6.5 0 0 1 4 5.8"/></svg></div><div class="stat-num" id="statTotal">0</div><div class="stat-label">Tổng nhân viên</div></div>
-        <div class="stat-card"><div class="stat-icon b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="stat-num" id="statActive">0</div><div class="stat-label">Đang hoạt động</div></div>
-        <div class="stat-card"><div class="stat-icon p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="10" rx="1.5"/></svg></div><div class="stat-num" id="statDoing">0</div><div class="stat-label">Việc đang chạy</div></div>
-        <div class="stat-card"><div class="stat-icon g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5.5"/></svg></div><div class="stat-num" id="statDone">0</div><div class="stat-label">Việc hoàn thành</div></div>
+        <div class="stat-card"><div class="stat-icon g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20a6.5 6.5 0 0 1 13 0"/><path d="M16 5a3.5 3.5 0 0 1 0 6.6M17.5 14.2a6.5 6.5 0 0 1 4 5.8"/></svg></div><div class="stat-num" id="statTotal">—</div><div class="stat-label">Tổng nhân viên</div></div>
+        <div class="stat-card"><div class="stat-icon b"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div><div class="stat-num" id="statActive">—</div><div class="stat-label">Đang hoạt động</div></div>
+        <div class="stat-card"><div class="stat-icon p"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="18" rx="1.5"/><rect x="14" y="3" width="7" height="10" rx="1.5"/></svg></div><div class="stat-num" id="statDoing">—</div><div class="stat-label">Việc đang chạy</div></div>
+        <div class="stat-card"><div class="stat-icon g"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m8.5 12.5 2.5 2.5 5-5.5"/></svg></div><div class="stat-num" id="statDone">—</div><div class="stat-label">Việc hoàn thành</div></div>
       </div>
 
       <div id="approvalSection" class="hidden">
@@ -894,6 +924,13 @@
       </div>
       <div id="taskBoard" class="board"></div>
       <div id="boardDots" class="board-dots"></div>
+    </section>
+
+    <!-- Tab Hộp thư (Trung tâm điều phối M06) -->
+    <section id="tab-inbox" class="tabpane hidden">
+      <h2 class="pane-title">Hộp thư</h2>
+      <p class="hint" style="margin-top:-6px">Hộp thư công việc tách riêng khỏi trao đổi tự do trong Phòng họp. “Đã đọc” không đồng nghĩa “đã xác nhận nhận việc”; “đã gửi thông báo” không đồng nghĩa người nhận đã nhận.</p>
+      <div id="inboxList"></div>
     </section>
 
     <!-- Tab Nhân viên -->
