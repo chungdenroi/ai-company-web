@@ -1,0 +1,28 @@
+[Unit]
+Description=Enteesee room realtime listener (Firestore Listen stream, gRPC)
+Documentation=file:///home/hatch/workspace/ai-company/listener/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/hatch/workspace/ai-company/listener
+# NOTE — READ BEFORE ENABLING:
+# This unit alone CANNOT start the listener. The listener needs its
+# access code on stdin at startup, and credentials must never live in
+# a unit file, an EnvironmentFile, or argv (all are readable via the
+# manager/ps). Automated supervision is the watchdog cron
+# (room-listener-watchdog): it fetches the current code and starts the
+# process with the code piped on stdin, then verifies it is alive.
+# This unit is kept for operator visibility and for manual starts in
+# environments where the operator supplies the code interactively.
+# Do NOT add any credential to this file.
+# The listener MUST run with the venv interpreter (system python has
+# no google-cloud-firestore): .venv/bin/python, not python3.
+ExecStart=/home/hatch/workspace/ai-company/listener/.venv/bin/python /home/hatch/workspace/ai-company/listener/listener.py --mode coordinator --email muse@aicompany.app --watermark-file /home/hatch/workspace/ai-company/hidden_files/firestore-watermark.json
+Restart=no
+TimeoutStopSec=15
+KillMode=process
+
+[Install]
+WantedBy=default.target
