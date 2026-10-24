@@ -317,11 +317,14 @@
   }
 
   /* ---------- Nhật ký quyết định (phase 1, append-only) ----------
-     Collection riêng "decisions": mỗi quyết định duyệt / trả lại / hoàn thành
-     ghi 1 bản ghi kèm lý do + thời gian. Ghi fire-and-forget SAU khi đổi
-     trạng thái việc thành công — nếu ghi log thất bại (vd Rules chưa mở
-     collection này) thì việc vẫn đổi trạng thái bình thường, chỉ báo console. */
-  function logDecision(action, t, reason) {
+     Collection riêng "decisions": mỗi quyết định duyệt / trả lại / hoàn thành /
+     trình duyệt ghi 1 bản ghi kèm lý do + bằng chứng + mức xác minh + thời gian.
+     Ghi fire-and-forget SAU khi đổi trạng thái việc thành công — nếu ghi log
+     thất bại (vd Rules chưa mở collection này) thì việc vẫn đổi trạng thái
+     bình thường, chỉ báo console. Mức xác minh phân biệt rõ:
+     "agent báo cáo" (người làm tự nói đã xong, chưa ai xác nhận) với
+     "đã xác nhận" (người khác — người duyệt hoặc quản lý — xác nhận). */
+  function logDecision(action, t, reason, evidence, verification, verifiedBy, approvalId) {
     if (!db || !state.me || !t) return;
     db.collection("decisions").add({
       actorId: state.me.id,
@@ -333,8 +336,100 @@
       assigneeId: t.assigneeId || "",
       assigneeName: empName(t.assigneeId),
       reason: reason || "",
+      evidence: evidence || "",
+      verification: verification || "",
+      verifiedBy: verifiedBy || "",
+      approvalId: approvalId || "",
       createdAt: serverTimestamp()
     }).catch(function (e) { console.warn("log decision:", e); });
+  }
+
+  /* ---------- Hồ sơ phê duyệt (phase 1 bổ sung) ----------
+     Phê duyệt là thực thể riêng (collection "approvals"), không chỉ là trạng
+     thái của việc: ghi người trình, thời điểm trình, người duyệt, thời điểm
+     duyệt, kết quả từng mục. Việc chuyển sang "Chờ duyệt" tạo 1 hồ sơ pending;
+     quyết định xong cập nhật hồ sơ đó. Việc cũ (đã "Chờ duyệt" từ trước khi
+     có collection này) thì tạo bù hồ sơ khi quyết định, kèm cờ backfilled. */
+  function createApprovalRequest(t) {
+    if (!db || !state.me) return Promise.resolve("");
+    return db.collection("approvals").add({
+      taskId: t.id,
+      taskTitle: t.title || "",
+      assigneeId: t.assigneeId || "",
+      assigneeName: empName(t.assigneeId),
+      requesterId: state.me.id,
+      requesterName: state.me.name,
+      requestedAt: serverTimestamp(),
+      status: "pending",
+      decidedBy: "",
+      decidedByName: "",
+      decidedAt: null,
+      decision: "",
+      reason: "",
+      evidence: "",
+      batchId: "",
+      backfilled: false
+    }).then(function (ref) {
+      db.collection("tasks").doc(t.id).update({ pendingApprovalId: ref.id }).catch(function (e) { console.warn("link approval:", e); });
+      return ref.id;
+    }).catch(function (e) { console.warn("create approval:", e); return ""; });
+  }
+  function ensureApprovalDoc(t) {
+    if (t.pendingApprovalId) return Promise.resolve(t.pendingApprovalId);
+    if (!db || !state.me) return Promise.resolve("");
+    return db.collection("approvals").add({
+      taskId: t.id,
+      taskTitle: t.title || "",
+      assigneeId: t.assigneeId || "",
+      assigneeName: empName(t.assigneeId),
+      requesterId: "",
+      requesterName: "",
+      requestedAt: null,
+      status: "pending",
+      decidedBy: "",
+      decidedByName: "",
+      decidedAt: null,
+      decision: "",
+      reason: "",
+      evidence: "",
+      batchId: "",
+      backfilled: true
+    }).then(function (ref) {
+      db.collection("tasks").doc(t.id).update({ pendingApprovalId: ref.id }).catch(function () {});
+      return ref.id;
+    }).catch(function (e) { console.warn("backfill approval:", e); return ""; });
+  }
+  function finalizeApproval(approvalId, decision, reason, evidence, batchId) {
+    if (!approvalId || !db || !state.me) return Promise.resolve();
+    return db.collection("approvals").doc(approvalId).update({
+      status: decision === "Duyệt" ? "approved" : "rejected",
+      decidedBy: state.me.id,
+      decidedByName: state.me.name,
+      decidedAt: serverTimestamp(),
+      decision: decision,
+      reason: reason || "",
+      evidence: evidence || "",
+      batchId: batchId || ""
+    }).catch(function (e) { console.warn("finalize approval:", e); });
+  }
+
+  /* Side effects dùng chung cho MỌI lần đổi trạng thái việc (bảng, modal,
+     Hộp duyệt): tạo hồ sơ phê duyệt khi trình duyệt, ghi decision log kèm
+     bằng chứng + mức xác minh. Không ghi activity ở đây (bên gọi đã ghi). */
+  function handleStatusSideEffects(t, oldStatus, newStatus, ctx) {
+    ctx = ctx || {};
+    if (newStatus === "Chờ duyệt" && oldStatus !== "Chờ duyệt") {
+      createApprovalRequest(t).then(function (approvalId) {
+        logDecision("Trình duyệt", t, "", ctx.evidence || "", "agent báo cáo", "", approvalId || "");
+      });
+      return;
+    }
+    if (ctx.action === "Duyệt" || ctx.action === "Trả lại") {
+      logDecision(ctx.action, t, ctx.reason || "", ctx.evidence || "", "đã xác nhận", state.me ? state.me.name : "", ctx.approvalId || "");
+    } else if (newStatus === "Hoàn thành") {
+      var isSelf = !!(state.me && t.assigneeId === state.me.id);
+      logDecision("Hoàn thành", t, ctx.reason || "", ctx.evidence || "", isSelf ? "agent báo cáo" : "đã xác nhận", isSelf ? "" : (state.me ? state.me.name : ""), ctx.approvalId || "");
+    }
   }
 
   /* ---------- Khởi tạo Firebase ---------- */
@@ -1302,6 +1397,13 @@
     if (s === "Hoàn thành") return "status-chip s-done";
     return "status-chip";
   }
+  /* Tên hiển thị của trạng thái — giá trị lưu trong Firestore giữ nguyên
+     ("Chờ nhận") để không mồ côi việc cũ; chỉ đổi cách hiển thị:
+     việc chưa xác nhận tuyệt đối không hiển thị thành "Đang làm". */
+  function statusText(s) {
+    if (s === "Chờ nhận") return "Đã gửi — chưa xác nhận";
+    return s || "—";
+  }
   function isOverdue(t) {
     if (!t || t.status === "Hoàn thành") return false;
     var ms = tsMillis(t.dueAt);
@@ -1338,22 +1440,54 @@
     });
   }
 
-  function setTaskStatus(t, newStatus, reason, action) {
+  /* Đổi trạng thái việc — điểm choke duy nhất cho đường bảng + Hộp duyệt.
+     ctx: {reason, action, evidence, approvalId, historyNote}.
+     Lịch sử thay đổi ghi bằng arrayUnion (chỉ thêm, không bao giờ ghi đè),
+     mỗi sự kiện gồm người đổi, từ → sang, ghi chú, thời điểm. */
+  function setTaskStatus(t, newStatus, ctx) {
     if (!db || !t) return Promise.resolve();
+    ctx = ctx || {};
+    var oldStatus = t.status || "";
+    var ev = {
+      actorId: state.me ? state.me.id : "",
+      actorName: state.me ? state.me.name : "",
+      from: oldStatus,
+      to: newStatus,
+      note: ctx.historyNote || "",
+      at: firebase.firestore.Timestamp.now()
+    };
     return db.collection("tasks").doc(t.id).update({
-      status: newStatus, updatedAt: serverTimestamp()
+      status: newStatus, updatedAt: serverTimestamp(),
+      history: firebase.firestore.FieldValue.arrayUnion(ev)
     }).then(function () {
       if (newStatus === "Hoàn thành") {
         logActivity("đã hoàn thành việc “" + (t.title || "") + "”", "task");
       } else {
         logActivity("đã chuyển việc “" + (t.title || "") + "” sang trạng thái " + newStatus, "task");
       }
-      /* Ghi nhật ký quyết định: Duyệt/Trả lại từ Hộp duyệt có lý do bắt buộc;
-         đổi nhanh bằng dropdown trên bảng mà ra Hoàn thành thì vẫn ghi log
-         nhưng lý do để trống (hiển thị "không ghi lý do", không bịa lý do). */
-      if (action) logDecision(action, t, reason || "");
-      else if (newStatus === "Hoàn thành") logDecision("Hoàn thành", t, "");
+      handleStatusSideEffects(t, oldStatus, newStatus, ctx);
     }).catch(function (e) { console.warn("update task status:", e); });
+  }
+
+  /* Xác nhận nhận việc — bước bắt buộc của người được giao khi việc còn ở
+     "Đã gửi — chưa xác nhận". Không đi qua setTaskStatus để không bị lẫn
+     với đổi trạng thái thường, nhưng vẫn ghi lịch sử + activity. */
+  function acknowledgeTask(t) {
+    if (!db || !state.me || !t || state.me.id !== t.assigneeId) return;
+    var ev = {
+      actorId: state.me.id,
+      actorName: state.me.name,
+      from: "Chờ nhận",
+      to: "Đang làm",
+      note: "Đã xác nhận nhận việc",
+      at: firebase.firestore.Timestamp.now()
+    };
+    db.collection("tasks").doc(t.id).update({
+      status: "Đang làm", updatedAt: serverTimestamp(),
+      history: firebase.firestore.FieldValue.arrayUnion(ev)
+    }).then(function () {
+      logActivity("đã xác nhận nhận việc “" + (t.title || "") + "”", "task");
+    }).catch(function (e) { console.warn("acknowledge:", e); });
   }
 
   /* Chấm chỉ thị cột (mobile): bảng việc vuốt ngang snap từng cột, chấm cho biết đang ở cột nào */
@@ -1385,23 +1519,28 @@
     var html = "";
     TASK_STATUSES.forEach(function (status) {
       var col = list.filter(function (t) { return t.status === status; });
-      html += '<div class="board-col"><h3>' + esc(status) +
+      html += '<div class="board-col"><h3>' + esc(statusText(status)) +
         ' <span class="chip count">' + col.length + "</span></h3>";
       if (!col.length) html += '<p class="col-empty">Không có việc nào.</p>';
       col.forEach(function (t) {
         var opts = TASK_STATUSES.map(function (s) {
-          return '<option value="' + esc(s) + '"' + (s === t.status ? " selected" : "") + ">" + esc(s) + "</option>";
+          return '<option value="' + esc(s) + '"' + (s === t.status ? " selected" : "") + ">" + esc(statusText(s)) + "</option>";
         }).join("");
+        var needsAck = !!(state.me && state.me.id === t.assigneeId && t.status === "Chờ nhận");
         html += '<div class="task-card' + (isOverdue(t) ? " overdue" : "") + '" data-task-id="' + esc(t.id) + '">' +
           '<div class="t-title">' + esc(t.title || "") + "</div>" +
           (t.description ? '<div class="t-desc">' + esc(t.description) + "</div>" : "") +
           '<div class="t-tags"><span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" +
             dueChipHtml(t) +
             (t.role ? '<span class="chip role">' + esc(t.role) + "</span>" : "") +
+            (t.sensitive ? '<span class="chip" style="border-color:#FEDF89">⚠ Quan trọng</span>' : "") +
             '<button class="chip" type="button" data-taskopen="' + esc(t.id) + '" style="cursor:pointer">Bình luận: ' + commentCount(t) + "</button></div>" +
           '<div class="t-meta">Phụ trách: <b>' + esc(empName(t.assigneeId)) + "</b> · Giao bởi: " + esc(empName(t.assignerId)) +
           (t.updatedAt ? " · Cập nhật: " + esc(fmtTime(t.updatedAt)) : "") + "</div>" +
-          '<div class="row"><span>Trạng thái:</span><select class="task-status">' + opts + "</select></div>" +
+          (needsAck
+            ? '<div class="row"><span class="chip">Đã gửi — chưa xác nhận</span>' +
+              '<button class="btn primary small" type="button" data-ack="' + esc(t.id) + '">Xác nhận nhận việc</button></div>'
+            : '<div class="row"><span>Trạng thái:</span><select class="task-status">' + opts + "</select></div>") +
           '<div class="t-note-label">Ghi chú kết quả</div>' +
           '<textarea class="task-note" rows="2" placeholder="Ghi chú kết quả...">' + esc(t.resultNote || "") + "</textarea>" +
           '<div class="row"><button class="btn ghost small task-note-save" type="button">Lưu ghi chú</button>' +
@@ -1415,7 +1554,7 @@
     board.querySelectorAll(".task-card").forEach(function (card) {
       var id = card.getAttribute("data-task-id");
       var sel = card.querySelector(".task-status");
-      sel.addEventListener("change", function () {
+      if (sel) sel.addEventListener("change", function () {
         var t = null;
         state.tasks.forEach(function (x) { if (x.id === id) t = x; });
         setTaskStatus(t || { id: id, title: "" }, sel.value);
@@ -1470,6 +1609,7 @@
       status: "Chờ nhận",
       priority: $("taskPriority").value,
       role: jobRole,
+      sensitive: $("taskSensitive") ? $("taskSensitive").checked : false,
       resultNote: "",
       dueAt: due,
       comments: [],
@@ -1480,6 +1620,7 @@
       $("taskDesc").value = "";
       $("taskDue").value = "";
       if ($("taskRole")) $("taskRole").value = "";
+      if ($("taskSensitive")) $("taskSensitive").checked = false;
       logActivity("đã tạo việc “" + title + "” giao cho " + empName(assignee), "task");
     }).catch(function (e) {
       errBox.textContent = "Tạo công việc thất bại. Vui lòng thử lại.";
@@ -1517,16 +1658,24 @@
       return (tsMillis(a.createdAt) || 0) - (tsMillis(b.createdAt) || 0);
     });
     var statusOpts = TASK_STATUSES.map(function (s) {
-      return '<option value="' + esc(s) + '"' + (s === t.status ? " selected" : "") + ">" + esc(s) + "</option>";
+      return '<option value="' + esc(s) + '"' + (s === t.status ? " selected" : "") + ">" + esc(statusText(s)) + "</option>";
     }).join("");
     var commentsHtml = comments.length ? comments.map(function (c) {
       return '<div class="comment-item"><div class="c-head"><b>' + esc(c.authorName || "") + "</b> · " +
         esc(fmtTime(c.createdAt)) + '</div><div class="c-body">' + esc(c.content || "") + "</div></div>";
     }).join("") : '<p class="hint">Chưa có bình luận nào.</p>';
+    var needsAckModal = !!(state.me && state.me.id === t.assigneeId && t.status === "Chờ nhận");
+    var histHtml = (t.history || []).length
+      ? (t.history || []).slice().reverse().map(function (h) {
+          return '<div class="comment-item"><div class="c-head"><b>' + esc(h.actorName || "") + "</b> · " +
+            esc(fmtTime(h.at)) + '</div><div class="c-body">' + esc(statusText(h.from)) + " → " + esc(statusText(h.to)) +
+            (h.note ? " — " + esc(h.note) : "") + "</div></div>";
+        }).join("")
+      : '<p class="hint">Chưa có lịch sử (việc tạo trước khi bật lịch sử).</p>';
 
     box.innerHTML =
       '<div class="profile-head"><div><div class="p-name" style="font-size:1.2rem">' + esc(t.title || "") + "</div>" +
-      '<div class="p-chips"><span class="' + statusChipClass(t.status) + '">' + esc(t.status) + "</span>" +
+      '<div class="p-chips"><span class="' + statusChipClass(t.status) + '">' + esc(statusText(t.status)) + "</span>" +
       '<span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" + dueChipHtml(t) + "</div></div></div>" +
       "<dl>" +
         "<dt>Phụ trách</dt><dd>" + esc(empName(t.assigneeId)) + "</dd>" +
@@ -1538,24 +1687,34 @@
       "</dl>" +
       (t.description ? "<h3>Mô tả</h3><div style='white-space:pre-wrap;word-break:break-word'>" + esc(t.description) + "</div>" : "") +
       "<h3>Cập nhật việc</h3>" +
+      (needsAckModal
+        ? '<div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="chip">Đã gửi — chưa xác nhận</span>' +
+          '<button class="btn primary small" type="button" data-ack="' + esc(t.id) + '">Xác nhận nhận việc</button></div>'
+        : "") +
       '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end">' +
-        '<div style="flex:1;min-width:150px"><label for="tmStatus" style="margin-top:0">Trạng thái</label><select id="tmStatus">' + statusOpts + "</select></div>" +
+        (needsAckModal ? "" :
+        '<div style="flex:1;min-width:150px"><label for="tmStatus" style="margin-top:0">Trạng thái</label><select id="tmStatus">' + statusOpts + "</select></div>") +
         '<div style="flex:1;min-width:150px"><label for="tmDue" style="margin-top:0">Hạn hoàn thành</label><input type="date" id="tmDue" value="' + esc(timestampToDateInput(t.dueAt)) + '"></div>' +
         '<div style="flex:1;min-width:150px"><label for="tmRole" style="margin-top:0">Vai trò của job</label><input type="text" id="tmRole" value="' + esc(t.role || "") + '" placeholder="VD: QA, Editor…"></div>' +
       "</div>" +
+      '<label style="display:block;margin-top:8px"><input type="checkbox" id="tmSensitive"' + (t.sensitive ? " checked" : "") + '> Việc quan trọng — cần kiểm tra riêng khi duyệt</label>' +
       '<label for="tmNote">Ghi chú kết quả</label>' +
       '<textarea id="tmNote" rows="2" placeholder="Ghi chú kết quả...">' + esc(t.resultNote || "") + "</textarea>" +
       '<div style="margin-top:10px"><button class="btn primary small" type="button" id="tmSave">Lưu thay đổi</button> ' +
       '<span id="tmMsg" class="ok-text hidden">Đã lưu.</span> <span id="tmErr" class="hidden" style="color:#b3261e"></span></div>' +
+      "<h3>Lịch sử thay đổi</h3>" +
+      histHtml +
       "<h3>Bình luận (" + comments.length + ")</h3>" +
       '<div id="tmComments">' + commentsHtml + "</div>" +
       '<div class="comment-form"><textarea id="tmCommentInput" rows="2" placeholder="Viết bình luận..."></textarea>' +
       '<button class="btn primary" type="button" id="tmCommentBtn">Gửi</button></div>';
 
     $("tmSave").addEventListener("click", function () {
-      var newStatus = $("tmStatus").value;
+      var statusEl = $("tmStatus");
+      var newStatus = statusEl ? statusEl.value : t.status;
       var noteVal = $("tmNote").value;
       var roleVal = $("tmRole") ? $("tmRole").value.trim() : "";
+      var sensVal = $("tmSensitive") ? $("tmSensitive").checked : !!t.sensitive;
       var statusChanged = newStatus !== t.status;
       /* Chốt hoàn thành phải ghi lý do — Ghi chú kết quả chính là lý do. */
       if (statusChanged && newStatus === "Hoàn thành" && !noteVal.trim()) {
@@ -1566,21 +1725,30 @@
       var patch = {
         resultNote: noteVal,
         role: roleVal,
+        sensitive: sensVal,
         dueAt: dateInputToTimestamp($("tmDue").value),
         updatedAt: serverTimestamp()
       };
-      if (statusChanged) patch.status = newStatus;
+      if (statusChanged) {
+        patch.status = newStatus;
+        patch.history = firebase.firestore.FieldValue.arrayUnion({
+          actorId: state.me ? state.me.id : "",
+          actorName: state.me ? state.me.name : "",
+          from: t.status || "",
+          to: newStatus,
+          note: newStatus === "Hoàn thành" ? noteVal.trim() : "",
+          at: firebase.firestore.Timestamp.now()
+        });
+      }
       db.collection("tasks").doc(t.id).update(patch).then(function () {
         var msg = $("tmMsg");
         if (msg) { msg.classList.remove("hidden"); setTimeout(function () { msg.classList.add("hidden"); }, 2000); }
         var er2 = $("tmErr");
         if (er2) er2.classList.add("hidden");
         if (statusChanged) {
-          if (newStatus === "Hoàn thành") {
-            logActivity("đã hoàn thành việc “" + (t.title || "") + "”", "task");
-            logDecision("Hoàn thành", t, noteVal.trim());
-          }
+          if (newStatus === "Hoàn thành") logActivity("đã hoàn thành việc “" + (t.title || "") + "”", "task");
           else logActivity("đã chuyển việc “" + (t.title || "") + "” sang trạng thái " + newStatus, "task");
+          handleStatusSideEffects(t, t.status, newStatus, { evidence: noteVal.trim() });
         }
       }).catch(function (e) { console.warn("task modal save:", e); });
     });
@@ -1679,9 +1847,13 @@
     }).join("");
   }
 
-  /* Hộp duyệt (phase 1, kiểu Inbox): việc Chờ duyệt, mỗi mục có ô lý do +
-     nút Duyệt / Trả lại, cộng nút Duyệt tất cả dùng 1 lý do chung.
-     Lý do là bắt buộc — quyết định nào cũng phải ghi lý do vào nhật ký. */
+  /* Hộp duyệt (phase 1, kiểu Inbox): việc Chờ duyệt, mỗi mục là 1 hồ sơ
+     phê duyệt riêng. Mỗi mục có ô lý do (bắt buộc) + ô bằng chứng +
+     nút Duyệt / Trả lại. KHÔNG có nút duyệt tất cả vô điều kiện:
+     duyệt lô chỉ áp dụng cho các mục đã tick và cùng mức ưu tiên, mỗi mục
+     có kết quả độc lập và được báo riêng. Agent không được tự phê duyệt
+     việc của chính mình. Việc quan trọng (sensitive) không duyệt lô được
+     mà phải duyệt riêng từng mục kèm tick kiểm tra riêng. */
   function showApprovalError(text) {
     var el = $("apError");
     if (!el) return;
@@ -1704,34 +1876,135 @@
     sec.classList.toggle("hidden", !list.length);
     if (!list.length) { box.innerHTML = ""; return; }
     var html =
-      '<p class="hint">Mỗi quyết định cần ghi lý do — lý do lưu vào Nhật ký quyết định để nhân viên thấy được.</p>' +
-      '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:flex-end;margin-bottom:10px">' +
-        '<div style="flex:1;min-width:200px"><label for="apAllReason" style="margin-top:0">Lý do chung khi duyệt tất cả</label>' +
-        '<input type="text" id="apAllReason" placeholder="Ví dụ: Đã kiểm tra, đạt yêu cầu"></div>' +
-        '<button class="btn primary small" type="button" id="apApproveAll">Duyệt tất cả (' + list.length + ")</button>" +
+      '<p class="hint">Mỗi mục là một hồ sơ phê duyệt riêng (người duyệt, thời điểm, kết quả từng mục được lưu riêng). Không có nút duyệt tất cả vô điều kiện.</p>' +
+      '<div class="row" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">' +
+        '<label style="margin:0;white-space:nowrap"><input type="checkbox" id="apSelectAll"> Chọn tất cả</label>' +
+        '<input type="text" id="apBatchReason" placeholder="Lý do chung cho các mục đã chọn (bắt buộc)" style="flex:1;min-width:200px">' +
+        '<input type="text" id="apBatchEvidence" placeholder="Bằng chứng chung (không bắt buộc)" style="flex:1;min-width:200px">' +
+        '<button class="btn primary small" type="button" id="apBatchBtn">Duyệt các mục đã chọn</button>' +
       "</div>" +
+      '<p class="hint" style="margin-top:0">Duyệt lô chỉ áp dụng cho các mục cùng mức ưu tiên; mỗi mục có kết quả độc lập, báo riêng từng mục. Việc quan trọng không duyệt lô được.</p>' +
+      '<p id="apBatchResult" class="hidden"></p>' +
       '<p id="apError" class="hidden" style="color:#b3261e"></p>';
     html += list.map(function (t) {
-      return '<div class="approval-item"><div class="ap-title">' + esc(t.title || "") +
+      return '<div class="approval-item">' +
+        '<input type="checkbox" class="apBatchCheck" data-batch="' + esc(t.id) + '" title="Chọn để duyệt lô">' +
+        '<div class="ap-title">' + esc(t.title || "") +
         '<div class="ap-meta">Phụ trách: ' + esc(empName(t.assigneeId)) + " · Giao bởi: " + esc(empName(t.assignerId)) +
-        (t.role ? " · Vai trò job: " + esc(t.role) : "") + "</div></div>" +
-        '<div style="flex:1;min-width:200px"><input type="text" id="apReason-' + esc(t.id) + '" placeholder="Lý do duyệt / trả lại (bắt buộc)"></div>' +
+        (t.role ? " · Vai trò job: " + esc(t.role) : "") + " · Ưu tiên: " + esc(t.priority || "Trung bình") + "</div>" +
+        (t.sensitive ? '<div class="ap-meta" style="color:#b3261e">⚠ Việc quan trọng — cần kiểm tra riêng, chỉ duyệt riêng từng mục</div>' : "") +
+        "</div>" +
+        '<div style="flex:1;min-width:220px">' +
+          '<input type="text" id="apReason-' + esc(t.id) + '" placeholder="Lý do duyệt / trả lại (bắt buộc)">' +
+          '<input type="text" id="apEvidence-' + esc(t.id) + '" placeholder="Bằng chứng / căn cứ (không bắt buộc)" style="margin-top:6px">' +
+          (t.sensitive ? '<label style="display:block;margin-top:6px"><input type="checkbox" id="apSensCheck-' + esc(t.id) + '"> Tôi đã kiểm tra riêng việc này</label>' : "") +
+        "</div>" +
         '<button class="btn primary small" type="button" data-approve="' + esc(t.id) + '">Duyệt — Hoàn thành</button>' +
         '<button class="btn ghost small" type="button" data-return="' + esc(t.id) + '">Trả lại — Đang làm</button></div>';
     }).join("");
     box.innerHTML = html;
-    var allBtn = $("apApproveAll");
-    if (allBtn) allBtn.addEventListener("click", function () {
-      var reason = $("apAllReason") ? $("apAllReason").value.trim() : "";
-      if (!reason) { showApprovalError("Duyệt tất cả cần ghi lý do chung."); var inp = $("apAllReason"); if (inp) inp.focus(); return; }
-      hideApprovalError();
-      allBtn.disabled = true;
-      var chain = Promise.resolve();
-      list.forEach(function (t) {
-        chain = chain.then(function () { return setTaskStatus(t, "Hoàn thành", reason, "Duyệt"); });
+    var selAll = $("apSelectAll");
+    if (selAll) selAll.addEventListener("change", function () {
+      var checks = box.querySelectorAll(".apBatchCheck");
+      for (var i = 0; i < checks.length; i++) checks[i].checked = selAll.checked;
+    });
+    var batchBtn = $("apBatchBtn");
+    if (batchBtn) batchBtn.addEventListener("click", runBatchApprove);
+  }
+
+  /* Quyết định 1 mục: chặn tự phê duyệt, chặn duyệt việc quan trọng khi
+     chưa tick kiểm tra riêng, lý do bắt buộc. */
+  function decideOne(t, decision) {
+    if (!state.me) return;
+    if (state.me.id === t.assigneeId) {
+      showApprovalError("Không được tự phê duyệt việc của chính mình (“" + (t.title || "") + "”).");
+      return;
+    }
+    var rin = $("apReason-" + t.id);
+    var ein = $("apEvidence-" + t.id);
+    var reason = rin ? rin.value.trim() : "";
+    var evidence = ein ? ein.value.trim() : "";
+    if (!reason) {
+      showApprovalError((decision === "Duyệt" ? "Duyệt" : "Trả lại") + " cần ghi lý do cho việc “" + (t.title || "") + "”.");
+      if (rin) rin.focus();
+      return;
+    }
+    if (t.sensitive && decision === "Duyệt") {
+      var chk = $("apSensCheck-" + t.id);
+      if (!chk || !chk.checked) {
+        showApprovalError("Việc quan trọng “" + (t.title || "") + "” cần bước kiểm tra riêng: hãy tick “Tôi đã kiểm tra riêng việc này” trước khi duyệt.");
+        return;
+      }
+    }
+    hideApprovalError();
+    var target = decision === "Duyệt" ? "Hoàn thành" : "Đang làm";
+    ensureApprovalDoc(t).then(function (approvalId) {
+      return setTaskStatus(t, target, { reason: reason, action: decision, evidence: evidence, approvalId: approvalId, historyNote: decision + " — lý do: " + reason }).then(function () { return approvalId; });
+    }).then(function (approvalId) {
+      return finalizeApproval(approvalId, decision, reason, evidence, "");
+    }).catch(function (e) { console.warn("decide one:", e); });
+  }
+
+  /* Duyệt lô có kiểm soát: chỉ các mục đã tick + cùng mức ưu tiên, mỗi mục
+     kết quả độc lập, báo cáo riêng từng mục — không bao giờ báo cả lô
+     thành công khi có mục thất bại. */
+  function runBatchApprove() {
+    var box = $("approvalList");
+    if (!box || !state.me) return;
+    var checked = box.querySelectorAll(".apBatchCheck:checked");
+    var tasks = [];
+    for (var i = 0; i < checked.length; i++) {
+      var t = findTask(checked[i].getAttribute("data-batch"));
+      if (t) tasks.push(t);
+    }
+    if (!tasks.length) { showApprovalError("Chưa chọn mục nào để duyệt lô."); return; }
+    var prios = [];
+    tasks.forEach(function (t) {
+      var p = t.priority || "Trung bình";
+      if (prios.indexOf(p) === -1) prios.push(p);
+    });
+    if (prios.length > 1) {
+      showApprovalError("Duyệt lô chỉ áp dụng cho các mục cùng mức ưu tiên. Các mục đã chọn gồm: " + prios.join(", ") + ". Hãy chọn lại các mục cùng một mức.");
+      return;
+    }
+    var reasonEl = $("apBatchReason"), evEl = $("apBatchEvidence");
+    var reason = reasonEl ? reasonEl.value.trim() : "";
+    var evidence = evEl ? evEl.value.trim() : "";
+    if (!reason) { showApprovalError("Duyệt lô cần ghi lý do chung."); if (reasonEl) reasonEl.focus(); return; }
+    hideApprovalError();
+    var btn = $("apBatchBtn");
+    if (btn) btn.disabled = true;
+    var batchId = "batch_" + Date.now();
+    var results = [];
+    var chain = Promise.resolve();
+    tasks.forEach(function (t) {
+      chain = chain.then(function () {
+        if (state.me.id === t.assigneeId) { results.push({ t: t, ok: false, cause: "không được tự phê duyệt" }); return; }
+        if (t.sensitive) { results.push({ t: t, ok: false, cause: "việc quan trọng — cần duyệt riêng từng mục" }); return; }
+        return ensureApprovalDoc(t).then(function (approvalId) {
+          return setTaskStatus(t, "Hoàn thành", { reason: reason, action: "Duyệt", evidence: evidence, approvalId: approvalId, historyNote: "Duyệt theo lô — lý do: " + reason }).then(function () { return approvalId; });
+        }).then(function (approvalId) {
+          return finalizeApproval(approvalId, "Duyệt", reason, evidence, batchId);
+        }).then(function () {
+          results.push({ t: t, ok: true });
+        }).catch(function () {
+          results.push({ t: t, ok: false, cause: "lỗi ghi dữ liệu" });
+        });
       });
-      chain.then(function () { allBtn.disabled = false; if (document.activeElement === allBtn && allBtn.blur) allBtn.blur(); renderApproval(); })
-        .catch(function () { allBtn.disabled = false; });
+    });
+    chain.then(function () {
+      if (btn) { btn.disabled = false; if (document.activeElement === btn && btn.blur) btn.blur(); }
+      renderApproval();
+      var ok = 0, fail = [];
+      results.forEach(function (r) { if (r.ok) ok++; else fail.push(r); });
+      var resEl = $("apBatchResult");
+      if (resEl) {
+        var html = "Kết quả duyệt lô: " + ok + " thành công, " + fail.length + " thất bại.";
+        if (fail.length) html += "<br>" + fail.map(function (f) { return "• " + esc(f.t.title || "") + ": " + esc(f.cause); }).join("<br>");
+        if (fail.length === 0 && ok === results.length && ok > 0) html += "<br>Tất cả các mục đã chọn đều duyệt thành công.";
+        resEl.innerHTML = html;
+        resEl.classList.remove("hidden");
+      }
     });
   }
 
@@ -1756,6 +2029,7 @@
     if (action === "Duyệt") return "đã duyệt";
     if (action === "Trả lại") return "đã trả lại";
     if (action === "Hoàn thành") return "đã hoàn thành";
+    if (action === "Trình duyệt") return "đã trình duyệt";
     return action || "—";
   }
   function renderDecisions() {
@@ -1767,10 +2041,16 @@
       return;
     }
     box.innerHTML = state.decisions.map(function (d) {
+      /* Tương thích ngược với bản ghi v1 (chưa có evidence/verification). */
+      var ver = d.verification || (d.action === "Duyệt" || d.action === "Trả lại" ? "đã xác nhận" : "agent báo cáo");
+      var verBy = d.verifiedBy || (ver === "đã xác nhận" ? (d.actorName || "") : "");
       return '<div class="activity-item"><span class="a-actor">' + esc(d.actorName || "") + "</span>" +
         "<span>" + esc(decisionActionText(d.action)) + " việc “" + esc(d.targetTitle || "") + "”" +
         (d.assigneeName ? " (phụ trách: " + esc(d.assigneeName) + ")" : "") +
-        " — lý do: " + esc(d.reason ? d.reason : "không ghi lý do") + "</span>" +
+        " — lý do: " + esc(d.reason ? d.reason : "không ghi lý do") +
+        " — bằng chứng: " + esc(d.evidence ? d.evidence : "không kèm bằng chứng") +
+        " — xác minh: " + esc(ver) + (verBy ? " bởi " + esc(verBy) : "") +
+        (d.approvalId ? " · kèm hồ sơ phê duyệt" : "") + "</span>" +
         '<span class="a-time">' + esc(relText(d.createdAt)) + "</span></div>";
     }).join("");
     if (st) st.textContent = "Đã tải " + state.decisions.length + " quyết định mới nhất.";
@@ -2164,6 +2444,7 @@
     var jobRoles = [];
     openTasks.forEach(function (t) { if (t.role && jobRoles.indexOf(t.role) === -1) jobRoles.push(t.role); });
     var reviewCount = myTasks.filter(function (t) { return t.status === "Chờ duyệt"; }).length;
+    var unackedCount = myTasks.filter(function (t) { return t.status === "Chờ nhận"; }).length;
     var commentCount = 0;
     state.tasks.forEach(function (t) { (t.comments || []).forEach(function (c) { if (c.authorId === e.id) commentCount++; }); });
     var p = presenceOf(e);
@@ -2180,7 +2461,7 @@
       ? myTasks.map(function (t) {
           return '<div class="mini-task"><span class="mt-title">' + esc(t.title || "") + "</span>" +
             (t.role ? '<span class="chip role">' + esc(t.role) + "</span>" : "") +
-            '<span class="' + statusChipClass(t.status) + '">' + esc(t.status) + "</span>" +
+            '<span class="' + statusChipClass(t.status) + '">' + esc(statusText(t.status)) + "</span>" +
             '<span class="' + prioClass(t.priority) + '">' + esc(t.priority || "Trung bình") + "</span>" +
             '<button class="link-btn" type="button" data-taskopen="' + esc(t.id) + '" style="margin-left:auto">Mở việc</button></div>';
         }).join("")
@@ -2238,6 +2519,7 @@
         '<div class="ps"><b>' + given + "</b><span>Việc đã giao</span></div>" +
         '<div class="ps"><b>' + sent + "</b><span>Tin đã gửi</span></div>" +
         '<div class="ps"><b>' + reviewCount + "</b><span>Việc chờ duyệt</span></div>" +
+        '<div class="ps"><b>' + unackedCount + "</b><span>Chưa xác nhận</span></div>" +
         '<div class="ps"><b>' + commentCount + "</b><span>Bình luận đã gửi</span></div>" +
       "</div>" +
       "<h3>Cấp dưới (" + subs.length + ")</h3>" + subsHtml +
@@ -3205,27 +3487,21 @@
     var ap = t.closest("[data-approve]");
     if (ap) {
       var ta = findTask(ap.getAttribute("data-approve"));
-      if (ta) {
-        var rin = $("apReason-" + ta.id);
-        var reason = rin ? rin.value.trim() : "";
-        if (!reason) { showApprovalError("Duyệt cần ghi lý do cho việc “" + (ta.title || "") + "”."); if (rin) rin.focus(); return; }
-        hideApprovalError();
-        setTaskStatus(ta, "Hoàn thành", reason, "Duyệt");
-        if (ap.blur) ap.blur();
-      }
+      if (ta) decideOne(ta, "Duyệt");
+      if (ap.blur) ap.blur();
       return;
     }
     var rt = t.closest("[data-return]");
     if (rt) {
       var tr = findTask(rt.getAttribute("data-return"));
-      if (tr) {
-        var rin2 = $("apReason-" + tr.id);
-        var reason2 = rin2 ? rin2.value.trim() : "";
-        if (!reason2) { showApprovalError("Trả lại cần ghi lý do cho việc “" + (tr.title || "") + "”."); if (rin2) rin2.focus(); return; }
-        hideApprovalError();
-        setTaskStatus(tr, "Đang làm", reason2, "Trả lại");
-        if (rt.blur) rt.blur();
-      }
+      if (tr) decideOne(tr, "Trả lại");
+      if (rt.blur) rt.blur();
+      return;
+    }
+    var ack = t.closest("[data-ack]");
+    if (ack) {
+      var ak = findTask(ack.getAttribute("data-ack"));
+      if (ak) acknowledgeTask(ak);
       return;
     }
     var gm = t.closest("[data-goto-msg]");
