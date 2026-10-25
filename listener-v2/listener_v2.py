@@ -438,6 +438,29 @@ def load_json(path, default):
         return default
 
 
+def read_boot_time(stat_path="/proc/stat"):
+    """Machine boot time (seconds since epoch) from /proc/stat btime.
+
+    Returns None when the file is missing, unreadable, or has no btime
+    line: the caller must then fall back to the old counting behavior
+    instead of guessing a cause of death.
+    """
+    try:
+        with open(stat_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    return int(line.split()[1])
+    except Exception:
+        return None
+    return None
+
+
+# Sentinel for StateStore.begin_run: no boot_time passed means "read
+# the machine's own boot time now"; an explicit None means "boot time
+# unreadable" (old counting behavior). Tests pass explicit ints.
+_READ_BOOT_TIME = object()
+
+
 class StateStore:
     """Per-worker persistent state (THIS worker's machine only).
 
@@ -447,6 +470,10 @@ class StateStore:
       events_total, last_event_ts
       consecutive_restarts, last_exit_ok (None = run in progress),
       ever_ran, run_state ("running" / "failed" / "ok")
+      boot_time: epoch seconds of the machine boot that wrote this
+        state (None = unknown, e.g. state written before this guard
+        existed). Used to tell a VM-replacement death apart from a
+        real crash loop: see begin_run.
     """
 
     def __init__(self, path):
@@ -460,6 +487,7 @@ class StateStore:
         self.data.setdefault("last_exit_ok", None)
         self.data.setdefault("ever_ran", False)
         self.data.setdefault("run_state", "unknown")
+        self.data.setdefault("boot_time", None)
         self.emitted_ids = set(self.data["emitted_ids"])
 
     def checkpoint(self, collection):
@@ -492,19 +520,46 @@ class StateStore:
         self.emitted_ids = set(ids)
         atomic_write_json(self.path, self.data)
 
-    def begin_run(self):
+    def begin_run(self, boot_time=_READ_BOOT_TIME):
         """Count consecutive abnormal restarts. Returns the count.
 
-        A previous run that ended cleanly (last_exit_ok True) resets
-        the count. A previous run that ended abnormally OR was killed
-        mid-run (last_exit_ok None after ever_ran) increments it.
+        The previous run's death is judged against the machine boot
+        time saved in this state file:
+        - boot time unreadable (None): safe fallback to the old
+          counting below -- never guess a cause of death.
+        - no boot time saved yet (first run under the new code):
+          initialize boot_time and reset the count to 0. The old
+          counter mixed VM-replacement deaths with real crashes, so
+          its value is untrustworthy and must not trip the lock.
+        - saved boot time differs from the current one: the machine
+          was replaced since the last run, so the previous death was
+          the VM swap -- reset the count to 0, do not count it.
+        - saved boot time matches: the old counting. A previous run
+          that ended cleanly (last_exit_ok True) resets the count; a
+          previous run that ended abnormally OR was killed mid-run
+          (last_exit_ok None after ever_ran) increments it.
+        The 5-trip lock itself is unchanged: run_forever still
+        refuses to loop once this count reaches
+        MAX_CONSECUTIVE_RESTARTS, so a real same-boot crash loop
+        still locks exactly as before.
         """
-        prev_ok = self.data.get("last_exit_ok")
-        if self.data.get("ever_ran") and prev_ok is not True:
+        if boot_time is _READ_BOOT_TIME:
+            boot_time = read_boot_time()
+        saved_boot = self.data.get("boot_time")
+        if boot_time is not None and saved_boot is None:
+            # First run under the new code: initialize, do not count.
+            self.data["consecutive_restarts"] = 0
+        elif boot_time is not None and saved_boot != boot_time:
+            # Machine replaced: the previous death was the VM swap.
+            self.data["consecutive_restarts"] = 0
+        elif self.data.get("ever_ran") and \
+                self.data.get("last_exit_ok") is not True:
             self.data["consecutive_restarts"] = int(
                 self.data.get("consecutive_restarts", 0)) + 1
         else:
             self.data["consecutive_restarts"] = 0
+        if boot_time is not None:
+            self.data["boot_time"] = boot_time
         self.data["ever_ran"] = True
         self.data["last_exit_ok"] = None
         self.data["run_state"] = "running"
