@@ -4498,7 +4498,7 @@
     built: false, loading: false, mode: "3d", selectedId: null, peopleIds: "",
     seenMsgIds: {}, bubbleTimers: {}, people: [], deskParts: [],
     boardGroup: null, boardMats: null, tileGeo: null, selectionRing: null,
-    renderer: null, scene: null, camera: null, raf: 0, lastFrame: 0,
+    renderer: null, scene: null, camera: null, raf: 0, lastFrame: 0, orbit: null, orbitHome: null,
     reduced: !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches)
   };
   function room3dAiStaff() {
@@ -4658,6 +4658,7 @@
       R3D.renderer = renderer;
       R3D.scene = scene;
       R3D.camera = camera;
+      initRoom3dOrbit();
       R3D.boardGroup = new THREE.Group();
       scene.add(R3D.boardGroup);
       R3D.deskParts = [];
@@ -4875,6 +4876,41 @@
     cam.bottom = -halfH;
     cam.updateProjectionMatrix();
   }
+  /* Xoay 360° + phóng to (lệnh Chủ tịch 28/10): quay CAMERA quanh phòng, không
+     đụng scene — giữ nguyên ánh sáng, dữ liệu presence và vòng lặp 30fps. Góc
+     nâng giữ nguyên để vẫn nhìn xéo isometric; chỉ đổi phương vị + độ phóng. */
+  function applyRoom3dOrbit() {
+    if (!R3D.built || !R3D.camera || !R3D.orbit) return;
+    var o = R3D.orbit, t = o.target;
+    var ch = Math.cos(o.el) * o.dist;
+    R3D.camera.position.set(t.x + Math.sin(o.az) * ch, t.y + Math.sin(o.el) * o.dist, t.z + Math.cos(o.az) * ch);
+    R3D.camera.lookAt(t);
+    R3D.camera.zoom = o.zoom;
+    R3D.camera.updateProjectionMatrix();
+    if (R3D.reduced) renderRoom3dOnce();
+  }
+  function room3dZoomBy(f) {
+    if (!R3D.orbit) return;
+    R3D.orbit.zoom = Math.max(0.6, Math.min(3, R3D.orbit.zoom * f));
+    applyRoom3dOrbit();
+  }
+  function resetRoom3dOrbit() {
+    if (!R3D.orbit || !R3D.orbitHome) return;
+    R3D.orbit.az = R3D.orbitHome.az;
+    R3D.orbit.el = R3D.orbitHome.el;
+    R3D.orbit.dist = R3D.orbitHome.dist;
+    R3D.orbit.zoom = R3D.orbitHome.zoom;
+    applyRoom3dOrbit();
+  }
+  function initRoom3dOrbit() {
+    if (!R3D.camera || R3D.orbit) return;
+    var tgt = new THREE.Vector3(0, 0.8, 0);
+    var off = R3D.camera.position.clone().sub(tgt);
+    var hz = Math.sqrt(off.x * off.x + off.z * off.z);
+    R3D.orbit = { target: tgt, az: Math.atan2(off.x, off.z), el: Math.atan2(off.y, hz), dist: off.length(), zoom: 1 };
+    R3D.orbitHome = { az: R3D.orbit.az, el: R3D.orbit.el, dist: R3D.orbit.dist, zoom: 1 };
+    applyRoom3dOrbit();
+  }
   function renderRoom3dOnce() {
     if (R3D.built) R3D.renderer.render(R3D.scene, R3D.camera);
   }
@@ -4995,6 +5031,12 @@
     if (ls) ls.addEventListener("input", function () { renderDecisions(); });
     var mb = $("room3dModeBtn");
     if (mb) mb.addEventListener("click", function () { setRoom3dMode(R3D.mode === "3d" ? "list" : "3d"); });
+    var rzi = $("room3dZoomInBtn");
+    if (rzi) rzi.addEventListener("click", function () { room3dZoomBy(1.25); });
+    var rzo = $("room3dZoomOutBtn");
+    if (rzo) rzo.addEventListener("click", function () { room3dZoomBy(1 / 1.25); });
+    var rzr = $("room3dResetBtn");
+    if (rzr) rzr.addEventListener("click", resetRoom3dOrbit);
     var gs = $("globalSearch");
     if (gs) {
       gs.addEventListener("input", renderSearchResults);
@@ -5089,8 +5131,45 @@
     var cvs = $("room3dCanvas");
     if (cvs) {
       var downX = 0, downY = 0;
-      cvs.addEventListener("pointerdown", function (ev) { downX = ev.clientX; downY = ev.clientY; });
+      var orbitPts = {}, pinchDist = 0, orbitWasPinch = false;
+      cvs.addEventListener("pointerdown", function (ev) {
+        downX = ev.clientX; downY = ev.clientY;
+        orbitPts[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+        if (Object.keys(orbitPts).length === 2) { orbitWasPinch = true; pinchDist = 0; }
+        try { cvs.setPointerCapture(ev.pointerId); } catch (e) {}
+      });
+      cvs.addEventListener("pointermove", function (ev) {
+        if (!orbitPts[ev.pointerId]) return;
+        var prev = orbitPts[ev.pointerId];
+        orbitPts[ev.pointerId] = { x: ev.clientX, y: ev.clientY };
+        var ids = Object.keys(orbitPts);
+        if (ids.length === 2) {
+          var a = orbitPts[ids[0]], b = orbitPts[ids[1]];
+          var d = Math.sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y));
+          if (pinchDist > 0 && d > 0) room3dZoomBy(d / pinchDist);
+          pinchDist = d;
+          return;
+        }
+        if (ids.length !== 1 || !R3D.orbit) return;
+        if (Math.abs(ev.clientX - downX) <= 6 && Math.abs(ev.clientY - downY) <= 6) return;
+        R3D.orbit.az -= (ev.clientX - prev.x) * 0.005;
+        applyRoom3dOrbit();
+      });
+      cvs.addEventListener("pointercancel", function (ev) {
+        delete orbitPts[ev.pointerId];
+        if (Object.keys(orbitPts).length === 0) orbitWasPinch = false;
+        pinchDist = 0;
+      });
+      cvs.addEventListener("wheel", function (ev) {
+        ev.preventDefault();
+        room3dZoomBy(Math.exp(-ev.deltaY * 0.0015));
+      }, { passive: false });
       cvs.addEventListener("pointerup", function (ev) {
+        var pinched = orbitWasPinch;
+        delete orbitPts[ev.pointerId];
+        if (Object.keys(orbitPts).length === 0) orbitWasPinch = false;
+        pinchDist = 0;
+        if (pinched) return;
         if (Math.abs(ev.clientX - downX) > 6 || Math.abs(ev.clientY - downY) > 6) return;
         if (!R3D.built) return;
         var rect = cvs.getBoundingClientRect();
